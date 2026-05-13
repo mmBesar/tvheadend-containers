@@ -18,9 +18,9 @@ To update the plugin using git, change into the directory where you had cloned t
 git pull
 ```
 
-To make use of the plugin, add dashdrm:// in front of the url.
+To make use of the plugin, add hlsdrm:// in front of the url.
 ```sh
-streamlink --plugin-dir /path/to/dashdrm/plugin --default-stream best --url hlsdrm://http://abc.def/xyz.m3u8
+streamlink --plugin-dir /path/to/hlsdrm/plugin --default-stream best --url hlsdrm://http://abc.def/xyz.m3u8
 ```
 
 # Parameters

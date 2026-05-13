@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import re
 import base64
 
-from typing import Literal, Self
+from typing import Literal, Self, ClassVar
+from requests import Response
 
 from streamlink.exceptions import PluginError, FatalPluginError
 from streamlink.logger import getLogger
@@ -9,7 +12,7 @@ from streamlink.plugin import Plugin, pluginmatcher, pluginargument
 from streamlink.plugin.plugin import LOW_PRIORITY, parse_params
 from streamlink.session import Streamlink
 from streamlink.stream.ffmpegmux import FFMPEGMuxer
-from streamlink.stream.hls import HLSStream, HLSStreamReader, MuxedHLSStream
+from streamlink.stream.hls import HLSStream, HLSStreamReader, HLSStreamWriter, HLSStreamWorker, MuxedHLSStream
 from streamlink.stream.hls.segment import HLSSegment, HLSPlaylist
 from streamlink.stream.hls.m3u8 import M3U8Parser, M3U8
 from streamlink.utils.url import update_scheme
@@ -144,8 +147,32 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
         #self._cmd.extend(["-report"])
         log.debug("Updated ffmpeg command %s", self._cmd)
 
+class HLSStreamWriterDRM(HLSStreamWriter):
+    reader: HLSStreamReaderDRM
+    stream: HLSStreamDRM
+
+    def _write(self, segment: HLSSegment, result: Response, is_map: bool):
+        key = segment.map.key if is_map and segment.map else segment.key
+        if key and key.method != "NONE":
+            self.passthrough_encrypted = False
+        super()._write(segment, result, is_map,)
+
+class HLSStreamWorkerDRM(HLSStreamWorker):
+    reader: HLSStreamReaderDRM
+    writer: HLSStreamWriterDRM
+    stream: HLSStreamDRM
+
+class HLSStreamReaderDRM(HLSStreamReader):
+    __worker__ = HLSStreamWorkerDRM
+    __writer__ = HLSStreamWriterDRM
+
+    worker: HLSStreamWorkerDRM
+    writer: HLSStreamWriterDRM
+    stream: HLSStreamDRM
+
 class HLSStreamDRM(HLSStream):
     __shortname__ = "hlsdrm"
+    __reader__: ClassVar[type[HLSStreamReaderDRM]] = HLSStreamReaderDRM
 
     @classmethod
     def parse_variant_playlist(
@@ -195,5 +222,7 @@ class HLSStreamDRM(HLSStream):
                                 )
                 new_streams[name] = muxed_stream
         return new_streams
+
+
 
 __plugin__ = HLSPluginDRM

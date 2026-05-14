@@ -12,7 +12,11 @@ from streamlink.plugin import Plugin, pluginmatcher, pluginargument
 from streamlink.plugin.plugin import LOW_PRIORITY, parse_params
 from streamlink.session import Streamlink
 from streamlink.stream.ffmpegmux import FFMPEGMuxer
-from streamlink.stream.hls import HLSStream, HLSStreamReader, HLSStreamWriter, HLSStreamWorker, MuxedHLSStream
+from streamlink.stream.hls import (HLSStream,
+                                    HLSStreamReader,
+                                    HLSStreamWriter,
+                                    HLSStreamWorker,
+                                    MuxedHLSStream)
 from streamlink.stream.hls.segment import HLSSegment, HLSPlaylist
 from streamlink.stream.hls.m3u8 import M3U8Parser, M3U8
 from streamlink.utils.url import update_scheme
@@ -44,7 +48,8 @@ HLSDRM_OPTIONS = [
 class HLSPluginDRM(Plugin):
     def _get_streams(self):
         data = self.match.groupdict()
-        url = update_scheme("https://", str(data.get("url", "")), force=False)
+        url = update_scheme("https://", str(data.get("url", "")),
+                        force=False)
         params = parse_params(data.get("params"))
         log.debug(f"URL={url}; params={params}")
 
@@ -58,7 +63,8 @@ class HLSPluginDRM(Plugin):
 
         self.session.set_option("stream-passthrough-encrypted", True)
 
-        return HLSStreamDRM.parse_variant_playlist(self.session, url, **params)
+        return HLSStreamDRM.parse_variant_playlist(self.session, url,
+                    **params)
 
 
     def _process_keys(self):
@@ -71,7 +77,7 @@ class HLSPluginDRM(Plugin):
             key_len = len(key[-1])
             log.debug('Decryption Key %s has %s digits', key[-1], key_len)
             if key_len in (21, 22, 23, 24):
-                # key len of 21-24 may mean a base64 key was provided, so we 
+                # key len of 21-24 may mean a base64 key was provided, so we
                 # try and decode it
                 log.debug("Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
                 b64_string = key[-1]
@@ -87,9 +93,9 @@ class HLSPluginDRM(Plugin):
                 try:
                     int(key[-1], 16)
                 except ValueError as err:
-                    raise FatalPluginError(f"Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
+                    raise FatalPluginError("Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
             elif key_len != 32:
-                raise FatalPluginError(f"Expecting 128bit key in 32 hex digits.")
+                raise FatalPluginError("Expecting 128bit key in 32 hex digits.")
             return_keys.append(key[-1])
         return return_keys
 
@@ -194,27 +200,35 @@ class HLSStreamDRM(HLSStream):
         duration: float | None = None,
         **kwargs,
     ) -> dict[str, Self | MuxedHLSStreamDRM[Self]]:
-        streams = super().parse_variant_playlist(session=session,
-                                                url=url,
-                                                name_key=name_key,
-                                                name_prefix=name_prefix,
-                                                check_streams=check_streams,
-                                                force_restart=force_restart,
-                                                name_fmt=name_fmt,
-                                                start_offset=start_offset,
-                                                duration=duration,
-                                                **kwargs)
+        streams = super().parse_variant_playlist(
+                            session=session,
+                            url=url,
+                            name_key=name_key,
+                            name_prefix=name_prefix,
+                            check_streams=check_streams,
+                            force_restart=force_restart,
+                            name_fmt=name_fmt,
+                            start_offset=start_offset,
+                            duration=duration,
+                            **kwargs)
         if not streams:
             log.debug ('No streams')
-            return {"live": MuxedHLSStreamDRM(session, 
-                                            video=url,
-                                            audio=None,
-                                            **kwargs)}
+            return {"live": MuxedHLSStreamDRM(
+                            session=session,
+                            video=url,
+                            audio=None,
+                            hlsstream=cls,
+                            start_offset=start_offset,
+                            duration=duration,
+                            **kwargs)}
 
         new_streams = {}
         for name, stream in streams.items():
             if isinstance(stream, MuxedHLSStream):
-                muxed_stream = MuxedHLSStreamDRM(stream.session, None, None)
+                muxed_stream = MuxedHLSStreamDRM(
+                                stream.session,
+                                None,
+                                None)
                 muxed_stream.__dict__.update(stream.__dict__)
                 new_streams[name] = muxed_stream
             else:
@@ -226,8 +240,7 @@ class HLSStreamDRM(HLSStream):
                                 multivariant=stream.multivariant,
                                 start_offset=stream.start_offset,
                                 duration=stream.duration,
-                                **kwargs,
-                                )
+                                **kwargs)
                 new_streams[name] = muxed_stream
         return new_streams
 
@@ -247,7 +260,8 @@ class MuxedHLSStreamDRM(MuxedHLSStream):
 
         for i, subtitle in enumerate(self.subtitles.items()):
             language, substream = subtitle
-            log.debug("Opening %s subtitle stream", substream.shortname())
+            log.debug("Opening %s subtitle stream",
+                    substream.shortname())
             if update_maps:
                 maps.append(len(fds))
             fds.append(substream and substream.open())

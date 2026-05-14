@@ -128,6 +128,7 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
         # if a decryption key is set, we rebuild the ffmpeg command list
         # to include the key before specifying the input stream
         keys = self._get_keys(session)
+        log.debug("Keys = %s", keys)
         key = 0
         # Build new ffmpeg command list
         old_cmd = self._cmd.copy()
@@ -157,7 +158,7 @@ class HLSStreamWriterDRM(HLSStreamWriter):
         key = segment.map.key if is_map and segment.map else segment.key
         if key and key.method == "AES-128":
             log.debug("Key Method is AES-128, we will let streamlink to try and decrypt.")
-            self.passthrough_encrypted = False
+            #self.passthrough_encrypted = False
         super()._write(segment, result, is_map,)
 
 class HLSStreamWorkerDRM(HLSStreamWorker):
@@ -190,7 +191,7 @@ class HLSStreamDRM(HLSStream):
         start_offset: float = 0,
         duration: float | None = None,
         **kwargs,
-    ) -> dict[str, Self | MuxedHLSStream[Self]]:
+    ) -> dict[str, Self | MuxedHLSStreamDRM[Self]]:
         streams = super().parse_variant_playlist(session=session,
                                                 url=url,
                                                 name_key=name_key,
@@ -203,7 +204,7 @@ class HLSStreamDRM(HLSStream):
                                                 **kwargs)
         if not streams:
             log.debug ('No streams')
-            return {"live": MuxedHLSStream(session, 
+            return {"live": MuxedHLSStreamDRM(session, 
                                             video=url,
                                             audio=None,
                                             **kwargs)}
@@ -211,12 +212,14 @@ class HLSStreamDRM(HLSStream):
         new_streams = {}
         for name, stream in streams.items():
             if isinstance(stream, MuxedHLSStream):
-                new_streams[name] = stream
+                muxed_stream = MuxedHLSStreamDRM(stream.session, None, None)
+                muxed_stream.__dict__.update(stream.__dict__)
+                new_streams[name] = muxed_stream
             else:
-                muxed_stream = MuxedHLSStream(
+                muxed_stream = MuxedHLSStreamDRM(
                                 stream.session,
-                                video = stream.url,
-                                audio = None,
+                                video=stream.url,
+                                audio=None,
                                 hlsstream=cls,
                                 multivariant=stream.multivariant,
                                 start_offset=stream.start_offset,
@@ -226,6 +229,32 @@ class HLSStreamDRM(HLSStream):
                 new_streams[name] = muxed_stream
         return new_streams
 
+class MuxedHLSStreamDRM(MuxedHLSStream):
+
+    def open(self):
+        fds = []
+        metadata = self.options.get("metadata", {})
+        maps = self.options.get("maps", [])
+        # only update the maps values if they haven't been set
+        update_maps = not maps
+        for substream in self.substreams:
+            log.debug("Opening %s substream", substream.shortname())
+            if update_maps:
+                maps.append(len(fds))
+            fds.append(substream and substream.open())
+
+        for i, subtitle in enumerate(self.subtitles.items()):
+            language, substream = subtitle
+            log.debug("Opening %s subtitle stream", substream.shortname())
+            if update_maps:
+                maps.append(len(fds))
+            fds.append(substream and substream.open())
+            metadata[f"s:s:{i}"] = [f"language={language}"]
+
+        self.options["metadata"] = metadata
+        self.options["maps"] = maps
+
+        return FFMPEGMuxerDRM(self.session, *fds, **self.options).open()
 
 
 __plugin__ = HLSPluginDRM

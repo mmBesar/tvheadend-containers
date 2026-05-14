@@ -124,6 +124,8 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
     def __init__(self, session, *streams, **options):
         if not session.options.get("ffmpeg-fout"):
             session.set_option("ffmpeg-fout", "mpegts")
+        if not session.options.get("ffmpeg-copyts"):
+            session.set_option("ffmpeg-copyts", True)
         super().__init__(session, *streams, **options)
         # if a decryption key is set, we rebuild the ffmpeg command list
         # to include the key before specifying the input stream

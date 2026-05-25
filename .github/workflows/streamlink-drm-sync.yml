@@ -1,20 +1,21 @@
-# .github/workflows/upstream-sync.yml
+# .github/workflows/streamlink-drm-sync.yml
 #
-# Syncs tvheadend/tvheadend:master → our `upstream` branch.
-# Dispatches a build event when new commits are detected.
+# Mirrors ImAleeexx/streamlink-drm → our `streamlink-drm` branch.
+# The Dockerfile builds from this branch, not the original repo,
+# so we are never at risk if the original is deleted or goes private.
 
-name: Sync — TVHeadend Upstream
+name: Sync — streamlink-drm Mirror
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "30 */6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: upstream-sync-tvh
+  group: upstream-sync-streamlink-drm
   cancel-in-progress: true
 
 jobs:
@@ -22,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       updated: ${{ steps.compare.outputs.updated }}
-      upstream_sha: ${{ steps.fetch.outputs.upstream_sha }}
 
     steps:
       - name: Checkout
@@ -36,37 +36,39 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Fetch upstream
+      - name: Fetch upstream streamlink-drm
         id: fetch
         run: |
-          git remote add upstream https://github.com/tvheadend/tvheadend.git || true
-          git fetch upstream master --no-tags
-          SHA=$(git rev-parse upstream/master)
+          git remote add sldrm https://github.com/titus-au/streamlink-plugin-dashdrm.git || true
+          git fetch sldrm main --no-tags
+          SHA=$(git rev-parse sldrm/main)
           echo "upstream_sha=${SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Compare with our upstream branch
+      - name: Compare with our streamlink-drm branch
         id: compare
         run: |
-          if git ls-remote --exit-code origin refs/heads/upstream; then
-            git fetch origin upstream
-            OUR=$(git rev-parse origin/upstream)
+          if git ls-remote --exit-code origin refs/heads/streamlink-drm; then
+            git fetch origin streamlink-drm
+            OUR=$(git rev-parse origin/streamlink-drm)
             if [ "$OUR" = "${{ steps.fetch.outputs.upstream_sha }}" ]; then
+              echo "No changes in streamlink-drm upstream."
               echo "updated=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
           echo "updated=true" >> "$GITHUB_OUTPUT"
 
-      - name: Update upstream branch
+      - name: Update streamlink-drm branch
         if: steps.compare.outputs.updated == 'true'
         run: |
-          git checkout -B upstream upstream/master
-          # Strip upstream's .github/ — must never interfere with our workflows
+          git checkout -B streamlink-drm sldrm/main
+          # Strip any .github/ from upstream to keep our workflows clean
           if [ -d .github ]; then
             git rm -rf .github/ --quiet
             git commit -m "chore: strip upstream .github/ [bot]"
           fi
-          git push origin upstream --force-with-lease
+          git push origin streamlink-drm --force-with-lease
+          echo "streamlink-drm branch updated to ${{ steps.fetch.outputs.upstream_sha }}"
 
   trigger-build:
     needs: sync
@@ -82,5 +84,5 @@ jobs:
               owner: context.repo.owner,
               repo:  context.repo.repo,
               event_type: 'upstream-release',
-              client_payload: { source: 'tvheadend', sha: '${{ needs.sync.outputs.upstream_sha }}' }
+              client_payload: { source: 'streamlink-drm' }
             });

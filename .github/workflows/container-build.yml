@@ -2,21 +2,21 @@
 #
 # Builds TVHeadend from source for:
 #   linux/amd64   — ubuntu-latest (native)
-#   linux/arm64   — arm64 GitHub-hosted runner (native, FREE — no QEMU)
-#   linux/riscv64 — RISE RISC-V runner (native, no QEMU)
+#   linux/arm64   — ubuntu-24.04-arm (native, free GitHub-hosted)
+#   linux/riscv64 — ubuntu-24.04-riscv (RISE RISC-V Runners, native)
 #
 # Rules:
 #  - NEVER use QEMU for arm64 or riscv64
-#  - built-tags.txt ledger prevents duplicate image builds
-#  - Image names are lowercase (GHCR requirement)
-#  - Tags point to OUR repo HEAD, not upstream commits
+#  - Builds from OUR upstream branch and OUR streamlink-drm branch
+#  - built-tags.txt ledger prevents duplicate builds
+#  - Image names lowercase (GHCR requirement)
 #  - Node24-compatible action versions (Node20 forced off 2026-06-16)
 
 name: Build & Push Multi-Arch Image
 
 permissions:
-  contents: write   # to update built-tags.txt
-  packages: write   # to push to GHCR
+  contents: write
+  packages: write
 
 concurrency:
   group: container-build-${{ github.ref }}
@@ -39,19 +39,23 @@ on:
     types: [upstream-release]
 
 jobs:
-  # ───────────────────────────────────────────────────────────────────────────
-  # Decide whether we actually need to build (skip if this SHA is already done)
-  # ───────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────
+  # Pre-flight: resolve branch HEADs and check the build ledger
+  # ─────────────────────────────────────────────────────────────────────────
   check:
     runs-on: ubuntu-latest
     outputs:
-      should_build: ${{ steps.ledger.outputs.should_build }}
-      image_name:   ${{ steps.image.outputs.name }}
-      short_sha:    ${{ steps.sha.outputs.short }}
+      should_build:    ${{ steps.ledger.outputs.should_build }}
+      image_name:      ${{ steps.image.outputs.name }}
+      short_sha:       ${{ steps.sha.outputs.short }}
+      tvh_ref:         ${{ steps.refs.outputs.tvh_ref }}
+      dashdrm_ref:     ${{ steps.refs.outputs.dashdrm_ref }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Derive image name (lowercase)
         id: image
@@ -61,18 +65,41 @@ jobs:
 
       - name: Short SHA
         id: sha
+        run: echo "short=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve branch refs to build from
+        id: refs
         run: |
-          echo "short=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+          # TVHeadend: build from our upstream branch if it exists, else master
+          if git ls-remote --exit-code origin refs/heads/upstream; then
+            TVH_REF=$(git rev-parse origin/upstream)
+            echo "Building TVHeadend from our upstream branch (${TVH_REF::8})"
+          else
+            TVH_REF="master"
+            echo "upstream branch not yet created — building from tvheadend/tvheadend:master"
+          fi
+          echo "tvh_ref=${TVH_REF}" >> "$GITHUB_OUTPUT"
+
+          # streamlink-drm plugin: build from our mirror branch if it exists
+          if git ls-remote --exit-code origin refs/heads/streamlink-drm; then
+            DASHDRM_REF=$(git rev-parse origin/streamlink-drm)
+            DASHDRM_REPO="https://github.com/$GITHUB_REPOSITORY"
+            echo "Building dashdrm from our streamlink-drm branch (${DASHDRM_REF::8})"
+          else
+            DASHDRM_REF="main"
+            DASHDRM_REPO="https://github.com/titus-au/streamlink-plugin-dashdrm"
+            echo "streamlink-drm branch not yet created — building from upstream titus-au"
+          fi
+          echo "dashdrm_ref=${DASHDRM_REF}" >> "$GITHUB_OUTPUT"
+          echo "dashdrm_repo=${DASHDRM_REPO}" >> "$GITHUB_OUTPUT"
 
       - name: Check built-tags ledger
         id: ledger
         run: |
-          # On PRs we always build (no push)
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
           if [ -f built-tags.txt ] && grep -qx "$GITHUB_SHA" built-tags.txt; then
             echo "SHA $GITHUB_SHA already built — skipping."
             echo "should_build=false" >> "$GITHUB_OUTPUT"
@@ -80,9 +107,9 @@ jobs:
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
-  # ───────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────
   # Build each arch on its native runner
-  # ───────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────
   build:
     needs: check
     if: needs.check.outputs.should_build == 'true'
@@ -91,16 +118,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch:    amd64
-            runner:  ubuntu-latest        # native x86_64
+          - arch:     amd64
+            runner:   ubuntu-latest
             platform: linux/amd64
 
-          - arch:    arm64
-            runner:  ubuntu-24.04-arm     # native arm64, free GitHub-hosted
+          - arch:     arm64
+            runner:   ubuntu-24.04-arm
             platform: linux/arm64
 
-          - arch:    riscv64
-            runner:  ubuntu-24.04-riscv   # RISE RISC-V runner (risev-runners.org)
+          - arch:     riscv64
+            runner:   ubuntu-24.04-riscv
             platform: linux/riscv64
 
     runs-on: ${{ matrix.runner }}
@@ -125,9 +152,6 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ needs.check.outputs.image_name }}
-          tags: |
-            type=raw,value=latest-${{ matrix.arch }}
-            type=sha,prefix=${{ matrix.arch }}-,format=short
 
       - name: Build & push (${{ matrix.arch }})
         uses: docker/build-push-action@v7
@@ -141,16 +165,17 @@ jobs:
             ghcr.io/${{ needs.check.outputs.image_name }}:${{ needs.check.outputs.short_sha }}-${{ matrix.arch }}
           build-args: |
             ALPINE_VERSION=edge
-            TVH_REPO=https://github.com/tvheadend/tvheadend
-            TVH_REF=master
+            TVH_REPO=https://github.com/${{ github.repository }}
+            TVH_REF=${{ needs.check.outputs.tvh_ref }}
+            DASHDRM_REPO=https://github.com/${{ github.repository }}
+            DASHDRM_REF=${{ needs.check.outputs.dashdrm_ref }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Per-arch GHA cache scoped to this arch to avoid cross-contamination
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to:   type=gha,mode=max,scope=${{ matrix.arch }}
 
-  # ───────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────
   # Combine per-arch images into a single multi-arch manifest
-  # ───────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────
   manifest:
     needs: [check, build]
     if: |
@@ -162,7 +187,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          # Need write access to update built-tags.txt
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
@@ -177,32 +201,23 @@ jobs:
 
       - name: Create and push multi-arch manifest
         env:
-          IMAGE: ghcr.io/${{ needs.check.outputs.image_name }}
+          IMAGE:     ghcr.io/${{ needs.check.outputs.image_name }}
           SHORT_SHA: ${{ needs.check.outputs.short_sha }}
         run: |
-          # :latest  — points to all three arches
           docker buildx imagetools create \
             --tag "${IMAGE}:latest" \
             --tag "${IMAGE}:${SHORT_SHA}" \
             "${IMAGE}:latest-amd64" \
             "${IMAGE}:latest-arm64" \
             "${IMAGE}:latest-riscv64"
-
-          echo "Manifest created:"
           docker buildx imagetools inspect "${IMAGE}:latest"
 
       - name: Update built-tags ledger
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Append this SHA so we never build it again
           echo "$GITHUB_SHA" >> built-tags.txt
-
-          # Keep the ledger tidy — last 100 entries only
-          tail -100 built-tags.txt > built-tags.tmp \
-            && mv built-tags.tmp built-tags.txt
-
+          tail -100 built-tags.txt > built-tags.tmp && mv built-tags.tmp built-tags.txt
           git add built-tags.txt
           git commit -m "chore: mark ${GITHUB_SHA::8} as built [bot]"
           git push origin main

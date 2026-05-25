@@ -1,66 +1,103 @@
-# TVHeadend + Streamlink — Self-Built Multi-Arch Container
+# TVHeadend + Streamlink Container
 
-TVHeadend compiled from source on Alpine Linux edge.  
-No dependency on LinuxServer.io or any other third-party image.
+[![Build & Push Multi-Arch Image](https://github.com/mmBesar/tvheadend-containers/actions/workflows/container-build.yml/badge.svg)](https://github.com/mmBesar/tvheadend-containers/actions/workflows/container-build.yml)
+[![Sync — TVHeadend Upstream](https://github.com/mmBesar/tvheadend-containers/actions/workflows/upstream-sync.yml/badge.svg)](https://github.com/mmBesar/tvheadend-containers/actions/workflows/upstream-sync.yml)
+[![Sync — streamlink-drm Mirror](https://github.com/mmBesar/tvheadend-containers/actions/workflows/streamlink-drm-sync.yml/badge.svg)](https://github.com/mmBesar/tvheadend-containers/actions/workflows/streamlink-drm-sync.yml)
+[![GitHub Container Registry](https://img.shields.io/badge/GHCR-ghcr.io%2Fmmbesar%2Ftvheadend--containers-blue?logo=github)](https://github.com/mmBesar/tvheadend-containers/pkgs/container/tvheadend-containers)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
+TVHeadend compiled from source on Alpine Linux edge, with streamlink and
+the dashdrm plugin included. All three architectures built natively — no QEMU.
 
 ## Supported architectures
 
-| Arch | Runner | Notes |
-|------|--------|-------|
+| Arch | Builder | Notes |
+|------|---------|-------|
 | `linux/amd64` | `ubuntu-latest` | Native |
 | `linux/arm64` | `ubuntu-24.04-arm` | Native GitHub-hosted (free) |
 | `linux/riscv64` | `ubuntu-24.04-riscv` | Native via RISE RISC-V Runners |
 
-**No QEMU is used for any architecture.**
+## Environment variables
 
-## Add-ons included
-
-- **streamlink** — official release, uses system `py3-lxml` (6.x)
-- **streamlink-drm** — installed `--no-deps` to bypass the `lxml<5` constraint,
-  all other deps installed manually, then copied to `/usr/local/bin/streamlink-drm`
-
-## riscv64 differences
-
-`libhdhomerun` is not available in Alpine for riscv64.  
-TVHeadend is built with `--disable-hdhomerun_client` on that arch.  
-Everything else (DVB-CSA, IPTV, SAT>IP, streamlink) works normally.
-
-## Workflows
-
-### `upstream-sync.yml`
-- Runs every 6 hours (and on `workflow_dispatch`)
-- Fetches `tvheadend/tvheadend:master` into our `upstream` branch
-- Strips upstream's `.github/` so it never interferes
-- Vendors `support/container-entrypoint.sh` into `main` if changed
-- Dispatches `upstream-release` event to trigger a new build
-
-### `container-build.yml`
-- Triggered by: push to `main` (Dockerfile/support changes), `workflow_dispatch`,
-  or `upstream-release` dispatch from the sync workflow
-- Builds natively on 3 runners in parallel
-- Creates a combined multi-arch manifest at `:latest` and `:<short-sha>`
-- Records built SHA in `built-tags.txt` to prevent duplicate builds
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUID` | `1000` | UID to run tvheadend as |
+| `PGID` | `1000` | GID to run tvheadend as |
+| `TZ` | `UTC` | Timezone, e.g. `Africa/Cairo` |
 
 ## Usage
 
 ```yaml
 services:
   tvheadend:
-    image: ghcr.io/mmbesar/tvheadend-streamlink:latest
+    image: ghcr.io/mmbesar/tvheadend-containers:latest
     container_name: tvheadend
-    network_mode: host        # required for IPTV multicast
+    network_mode: host          # required for IPTV multicast
     environment:
-      - TVHEADEND_DATA_DIR=/config
+      PUID: 1000
+      PGID: 1000
+      TZ: Africa/Cairo
     volumes:
-      - ./config:/config
+      - ./config:/var/lib/tvheadend
       - ./recordings:/var/lib/tvheadend/recordings
+    devices:
+      - /dev/dri:/dev/dri       # optional — GPU transcoding
+      - /dev/dvb:/dev/dvb       # optional — DVB tuners
     restart: unless-stopped
 ```
 
-## First-time setup
+## First run
 
-1. Push this repo to `github.com/mmBesar/<repo-name>`
-2. The RISE RISC-V runner requires installing the **risev-runners.org** GitHub App
-   on your repo — follow https://risev-runners.org to connect it
-3. Trigger the first build manually:  
-   `Actions → Build & Push Multi-Arch Image → Run workflow`
+On first start, if no access control config exists, TVHeadend starts with
+`--noacl` (open access, no login required), matching the classic behavior.
+Once you configure any access rule in the WebUI, it is never passed again.
+
+## Ports
+
+| Port | Protocol | Description |
+|------|----------|-------------|
+| `9981` | HTTP | WebUI |
+| `9982` | HTSP | Kodi / client apps |
+| `9983` | HTTPS | WebUI (TLS) |
+
+## riscv64 notes
+
+`libhdhomerun` is not available in Alpine for riscv64. TVHeadend is built
+with `--disable-hdhomerun_client` on that arch. Everything else — DVB-CSA,
+IPTV, SAT>IP, streamlink — works normally.
+
+## Workflows
+
+| Workflow | Schedule | Purpose |
+|----------|----------|---------|
+| `upstream-sync.yml` | Every 6h | Mirrors `tvheadend/tvheadend:master` → our `upstream` branch; triggers a build on new commits |
+| `streamlink-drm-sync.yml` | Every 6h (offset) | Mirrors `titus-au/streamlink-plugin-dashdrm:main` → our `streamlink-drm` branch; triggers a build on new commits |
+| `container-build.yml` | On push / dispatch | Builds all three arches natively from our own branches; creates multi-arch manifest |
+
+The build always uses our own mirrored branches — never fetches directly
+from upstream at build time — so builds are reproducible and resilient to
+upstream deletions or outages.
+
+## RISE RISC-V Runners
+
+The riscv64 build requires the **RISE RISC-V Runners** GitHub App.
+Install it at [risev-runners.org](https://risev-runners.org) and grant it
+access to this repo. Without it, the riscv64 job will queue indefinitely.
+
+> If you ever delete and recreate this repo, re-authorize the RISE app under
+> **Settings → Integrations → GitHub Apps** — it binds to the repo's internal
+> ID, not its name.
+
+---
+
+## Credits
+
+This project is built on the shoulders of these open-source projects:
+
+| Project | Author | License |
+|---------|--------|---------|
+| [TVHeadend](https://github.com/tvheadend/tvheadend) | TVHeadend Project | GPL-3.0 |
+| [streamlink](https://github.com/streamlink/streamlink) | Streamlink Team | BSD-2-Clause |
+| [streamlink-plugin-dashdrm](https://github.com/titus-au/streamlink-plugin-dashdrm) | titus-au | BSD-2-Clause |
+| [Alpine Linux](https://alpinelinux.org) | Alpine Linux Team | Various |
+| [RISE RISC-V Runners](https://risev-runners.org) | RISE Project | — |

@@ -1,3 +1,4 @@
 # Built image SHAs — managed by container-build.yml
 # One SHA per line. Last 100 entries kept.
 2991bd08cd192056899e0747b0463102902c235f
+cca0aedb7dbc1886ff27044ff7f7b9b312bec8fa

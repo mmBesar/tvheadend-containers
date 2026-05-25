@@ -72,7 +72,7 @@ jobs:
         run: |
           # TVHeadend: build from our upstream branch if it exists, else master
           if git ls-remote --exit-code origin refs/heads/upstream; then
-            TVH_REF=$(git rev-parse origin/upstream)
+            TVH_REF="upstream"
             echo "Building TVHeadend from our upstream branch (${TVH_REF::8})"
           else
             TVH_REF="master"
@@ -82,7 +82,7 @@ jobs:
 
           # streamlink-drm plugin: build from our mirror branch if it exists
           if git ls-remote --exit-code origin refs/heads/streamlink-drm; then
-            DASHDRM_REF=$(git rev-parse origin/streamlink-drm)
+            DASHDRM_REF="streamlink-drm"
             DASHDRM_REPO="https://github.com/$GITHUB_REPOSITORY"
             echo "Building dashdrm from our streamlink-drm branch (${DASHDRM_REF::8})"
           else

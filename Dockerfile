@@ -120,7 +120,9 @@ RUN if [ "$TARGETARCH" = "riscv64" ]; then \
 # Clone our mirror of streamlink-drm plugin and install it as a sideloaded plugin.
 # streamlink looks for plugins in ~/.local/share/streamlink/plugins/ by default,
 # but we install to /usr/local/share/streamlink/plugins/ so it's system-wide.
-RUN git clone --depth 1 --branch "${DASHDRM_REF}" "${DASHDRM_REPO}" /dashdrm \
+RUN git clone "${DASHDRM_REPO}" /dashdrm \
+ && cd /dashdrm \
+ && git checkout "${DASHDRM_REF}" \
  && mkdir -p /usr/local/share/streamlink/plugins \
  && cp /dashdrm/dashdrm/*.py /usr/local/share/streamlink/plugins/
 

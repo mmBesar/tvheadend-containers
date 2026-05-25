@@ -1,0 +1,142 @@
+# .github/workflows/upstream-sync.yml
+#
+# Syncs tvheadend/tvheadend:master into our `upstream` branch and
+# also keeps support/container-entrypoint.sh vendored in `main`.
+#
+# Rules (from established pattern):
+#  - upstream branch contains ONLY upstream code, no .github/ from upstream
+#  - Tags point to OUR clean HEAD, not upstream commits
+#  - built-tags.txt ledger lives on main, not upstream
+
+name: Upstream Sync
+
+on:
+  schedule:
+    # Check for upstream changes every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    outputs:
+      updated: ${{ steps.compare.outputs.updated }}
+      upstream_sha: ${{ steps.fetch.outputs.upstream_sha }}
+
+    steps:
+      - name: Checkout our repo (main)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        id: fetch
+        run: |
+          git remote add upstream https://github.com/tvheadend/tvheadend.git || true
+          git fetch upstream master --no-tags
+          UPSTREAM_SHA=$(git rev-parse upstream/master)
+          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Upstream HEAD: ${UPSTREAM_SHA}"
+
+      - name: Check if upstream branch exists
+        id: branch-check
+        run: |
+          if git ls-remote --exit-code origin refs/heads/upstream; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compare with our upstream branch
+        id: compare
+        run: |
+          if [ "${{ steps.branch-check.outputs.exists }}" = "true" ]; then
+            git fetch origin upstream
+            OUR_SHA=$(git rev-parse origin/upstream)
+            UPSTREAM_SHA="${{ steps.fetch.outputs.upstream_sha }}"
+            if [ "$OUR_SHA" = "$UPSTREAM_SHA" ]; then
+              echo "No upstream changes."
+              echo "updated=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Upstream has new commits."
+              echo "updated=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "upstream branch does not exist yet — will create."
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update upstream branch
+        if: steps.compare.outputs.updated == 'true'
+        run: |
+          # Check out (or create) our upstream branch
+          git checkout -B upstream upstream/master 2>/dev/null \
+            || git checkout -B upstream "${{ steps.fetch.outputs.upstream_sha }}"
+
+          # CRITICAL: strip upstream's own .github/ so it can never interfere
+          # with our workflows or block our .github/ directory on main.
+          if [ -d .github ]; then
+            git rm -rf .github/ --quiet
+            git commit -m "chore: strip upstream .github/ [bot]" \
+              --allow-empty
+          fi
+
+          git push origin upstream --force-with-lease
+
+      - name: Sync entrypoint script to main
+        if: steps.compare.outputs.updated == 'true'
+        run: |
+          # Grab the entrypoint from the updated upstream branch
+          ENTRYPOINT=$(git show upstream:support/container-entrypoint.sh 2>/dev/null || echo "")
+          if [ -z "$ENTRYPOINT" ]; then
+            echo "No entrypoint found upstream — keeping existing vendor copy."
+            exit 0
+          fi
+
+          git checkout main
+          mkdir -p support
+          echo "$ENTRYPOINT" > support/container-entrypoint.sh
+
+          if git diff --quiet support/container-entrypoint.sh; then
+            echo "Entrypoint unchanged."
+          else
+            git add support/container-entrypoint.sh
+            git commit -m "chore: sync container-entrypoint.sh from upstream [bot]"
+            git push origin main
+          fi
+
+  # Trigger the build workflow when upstream has new commits
+  trigger-build:
+    needs: sync
+    if: needs.sync.outputs.updated == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispatch container-build
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              event_type: 'upstream-release',
+              client_payload: {
+                upstream_sha: '${{ needs.sync.outputs.upstream_sha }}'
+              }
+            });
+            console.log('Dispatched upstream-release event');

@@ -126,18 +126,24 @@ RUN if [ "$TARGETARCH" = "riscv64" ]; then \
       pip install --break-system-packages pycryptodome; \
     fi
 
-# Clone our streamlink-drm branch and install dashdrm.py directly into
-# streamlink's site-packages plugins directory — auto-discovered, no flags needed.
-# dashdrm.py lives at the ROOT of the repo (not in a subdirectory).
-# streamlink --plugins only lists built-in plugins, not sideloaded/installed ones,
-# so we verify by checking the file exists and Python can import it.
+# Clone our streamlink-drm branch — split into separate RUN steps so each
+# failure is immediately visible in the build log.
+
+# Step 1: clone
+RUN git clone "${DASHDRM_REPO}" /dashdrm
+
+# Step 2: checkout the right ref (branch name or SHA both work)
+RUN cd /dashdrm && git checkout "${DASHDRM_REF}"
+
+# Step 3: show repo tree so we can see exact file structure if next step fails
+RUN find /dashdrm -maxdepth 2 -type f -name "*.py"
+
+# Step 4: install dashdrm.py into streamlink's site-packages plugins directory.
+# It then auto-loads with no --plugin-dir flag needed.
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
  && PLUGIN_DIR="${SITE}/streamlink/plugins" \
- && git clone "${DASHDRM_REPO}" /dashdrm \
- && cd /dashdrm \
- && git checkout "${DASHDRM_REF}" \
+ && echo "Target: ${PLUGIN_DIR}" \
  && cp /dashdrm/dashdrm.py "${PLUGIN_DIR}/dashdrm.py" \
- && echo "dashdrm plugin installed to ${PLUGIN_DIR}/dashdrm.py" \
  && ls -la "${PLUGIN_DIR}/dashdrm.py" \
  && echo "dashdrm install OK"
 

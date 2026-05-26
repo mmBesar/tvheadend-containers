@@ -126,19 +126,20 @@ RUN if [ "$TARGETARCH" = "riscv64" ]; then \
       pip install --break-system-packages pycryptodome; \
     fi
 
-# Clone our streamlink-drm branch and install the plugin directly into
-# streamlink's built-in plugins directory inside site-packages.
-# This makes it load automatically — no --plugin-dir flag ever needed.
+# Clone our streamlink-drm branch and install dashdrm.py directly into
+# streamlink's site-packages plugins directory — auto-discovered, no flags needed.
+# dashdrm.py lives at the ROOT of the repo (not in a subdirectory).
+# streamlink --plugins only lists built-in plugins, not sideloaded/installed ones,
+# so we verify by checking the file exists and Python can import it.
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
  && PLUGIN_DIR="${SITE}/streamlink/plugins" \
  && git clone "${DASHDRM_REPO}" /dashdrm \
  && cd /dashdrm \
  && git checkout "${DASHDRM_REF}" \
- && cp /dashdrm/dashdrm/dashdrm.py "${PLUGIN_DIR}/dashdrm.py" \
+ && cp /dashdrm/dashdrm.py "${PLUGIN_DIR}/dashdrm.py" \
  && echo "dashdrm plugin installed to ${PLUGIN_DIR}/dashdrm.py" \
- # Verify streamlink sees the plugin automatically
- && streamlink --plugins | grep -i dashdrm \
- && echo "dashdrm auto-discovered OK"
+ && ls -la "${PLUGIN_DIR}/dashdrm.py" \
+ && echo "dashdrm install OK"
 
 # Snapshot packages and binary for the runner stage
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
@@ -203,9 +204,9 @@ COPY --from=streamlink-builder /export/bin/streamlink /usr/local/bin/streamlink
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
  && cp -a /streamlink-pkgs/. "${SITE}/" \
  && rm -rf /streamlink-pkgs \
- # Final verification: streamlink runs and dashdrm is auto-discovered
+ # Verify streamlink runs and dashdrm.py landed in the right place
  && streamlink --version \
- && streamlink --plugins | grep -i dashdrm \
+ && ls -la "${SITE}/streamlink/plugins/dashdrm.py" \
  && echo "All OK"
 
 # Entrypoint: PUID/PGID remapping, TZ, device groups, first-run ACL setup

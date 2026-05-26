@@ -46,11 +46,22 @@ services:
     restart: unless-stopped
 ```
 
-## First run
+## Authentication
 
-On first start, if no access control config exists, TVHeadend starts with
-`--noacl` (open access, no login required), matching the classic behavior.
-Once you configure any access rule in the WebUI, it is never passed again.
+On first start, a wildcard access entry (`*`) is created automatically —
+**no login is required by default**, exactly like the classic LinuxServer image.
+
+**To enable authentication:**
+1. Open the WebUI → **Configuration → Users → Access Entries**
+2. Create your own user with a username and password under **Configuration → Users → Passwords**
+3. Disable or delete the `*` wildcard entry
+4. From this point on, TVHeadend will require login
+
+**To go back to open access:** re-enable the `*` entry, or create a new one
+with username `*` and prefix `0.0.0.0/0`.
+
+The wildcard entry is only created on a genuine first run (empty config
+directory). Existing installs are never touched.
 
 ## Ports
 
@@ -59,6 +70,29 @@ Once you configure any access rule in the WebUI, it is never passed again.
 | `9981` | HTTP | WebUI |
 | `9982` | HTSP | Kodi / client apps |
 | `9983` | HTTPS | WebUI (TLS) |
+
+## Streamlink & DRM streams
+
+This image includes [streamlink](https://streamlink.github.io) and the
+[dashdrm plugin](https://github.com/titus-au/streamlink-plugin-dashdrm)
+for DRM-protected streams.
+
+The dashdrm plugin is a **sideloaded streamlink plugin** — not a separate
+binary. You use `streamlink` as normal; the plugin is loaded automatically
+and adds support for DASH streams with ClearKey/Widevine DRM.
+
+```bash
+# Regular stream
+streamlink https://example.com/stream best
+
+# DRM stream (dashdrm plugin handles it transparently)
+streamlink https://example.com/drm-stream best
+```
+
+In TVHeadend, configure your IPTV network pipe command as:
+```
+streamlink --stdout {url} best
+```
 
 ## riscv64 notes
 
@@ -70,29 +104,25 @@ IPTV, SAT>IP, streamlink — works normally.
 
 | Workflow | Schedule | Purpose |
 |----------|----------|---------|
-| `upstream-sync.yml` | Every 6h | Mirrors `tvheadend/tvheadend:master` → our `upstream` branch; triggers a build on new commits |
-| `streamlink-drm-sync.yml` | Every 6h (offset) | Mirrors `titus-au/streamlink-plugin-dashdrm:main` → our `streamlink-drm` branch; triggers a build on new commits |
-| `container-build.yml` | On push / dispatch | Builds all three arches natively from our own branches; creates multi-arch manifest |
+| `upstream-sync.yml` | Every 6h | Mirrors `tvheadend/tvheadend:master` → our `upstream` branch |
+| `streamlink-drm-sync.yml` | Every 6h (offset) | Mirrors dashdrm plugin → our `streamlink-drm` branch |
+| `container-build.yml` | On push / dispatch | Builds all three arches natively; creates multi-arch manifest |
 
-The build always uses our own mirrored branches — never fetches directly
-from upstream at build time — so builds are reproducible and resilient to
-upstream deletions or outages.
+Builds always use our own mirrored branches — never fetches from upstream
+at build time — so builds are reproducible and resilient to upstream outages.
 
 ## RISE RISC-V Runners
 
 The riscv64 build requires the **RISE RISC-V Runners** GitHub App.
-Install it at [risev-runners.org](https://risev-runners.org) and grant it
-access to this repo. Without it, the riscv64 job will queue indefinitely.
+Install it at [risev-runners.org](https://risev-runners.org).
 
-> If you ever delete and recreate this repo, re-authorize the RISE app under
+> If you delete and recreate this repo, re-authorize the RISE app under
 > **Settings → Integrations → GitHub Apps** — it binds to the repo's internal
 > ID, not its name.
 
 ---
 
 ## Credits
-
-This project is built on the shoulders of these open-source projects:
 
 | Project | Author | License |
 |---------|--------|---------|

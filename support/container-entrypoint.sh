@@ -1,8 +1,8 @@
 #!/bin/sh
 # container-entrypoint.sh
 #
-# Handles PUID, PGID, TZ, device group membership, and first-run ACL
-# before exec'ing tvheadend. Runs as root via tini, drops privileges after.
+# Handles PUID, PGID, TZ, device group membership, and first-run ACL setup.
+# Runs as root via tini, drops privileges to tvheadend user after setup.
 #
 # Env vars:
 #   PUID  — UID to run as (default: 1000)
@@ -12,6 +12,7 @@ set -eu
 
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
+TVH_DATA="${TVHEADEND_DATA_DIR:-/var/lib/tvheadend}"
 
 # ── Timezone ──────────────────────────────────────────────────────────────────
 if [ -n "${TZ:-}" ]; then
@@ -37,17 +38,12 @@ if [ "$PUID" != "$CURRENT_UID" ]; then
 fi
 
 # ── Device group membership ───────────────────────────────────────────────────
-# Walk every actual device node under /dev/dvb and /dev/dri and ensure
-# tvheadend is a member of whichever group owns each device.
-# (The parent directory GID is often root and meaningless — the devices
-# themselves carry the real restricting GID.)
+# Walk every actual device node under /dev/dvb and /dev/dri — the device nodes
+# carry the real restricting GID, not the parent directory.
 for DEV in $(find /dev/dvb /dev/dri -type c 2>/dev/null); do
     DEV_GID=$(stat -c '%g' "$DEV")
-    # Skip GID 0 (root-owned devices — no group restriction)
     [ "$DEV_GID" = "0" ] && continue
-    # Already a member? Skip.
     id -G tvheadend | tr ' ' '\n' | grep -qx "$DEV_GID" && continue
-    # Create a group for this GID if none exists yet
     getent group "$DEV_GID" > /dev/null 2>&1 \
         || addgroup -S -g "$DEV_GID" "devgrp${DEV_GID}"
     DEV_GROUP=$(getent group "$DEV_GID" | cut -d: -f1)
@@ -57,26 +53,53 @@ done
 
 # ── Fix ownership on data directories ────────────────────────────────────────
 chown -R tvheadend:tvheadend \
-    /var/lib/tvheadend \
+    "${TVH_DATA}" \
     /var/log/tvheadend
+
+# ── First-run: create wildcard access entry (no authentication by default) ───
+#
+# Matches LinuxServer.io behaviour exactly:
+#   - username "*" with prefix 0.0.0.0/0 = any user, any IP, no password needed
+#   - Full admin + streaming + DVR rights
+#   - To enable authentication: disable or delete this entry in the WebUI,
+#     then create your own named user. That's it.
+#
+# We only create this if the accesscontrol directory is completely empty
+# (genuine first run, not an existing install being migrated).
+ACL_DIR="${TVH_DATA}/accesscontrol"
+if [ ! -d "$ACL_DIR" ] || [ -z "$(ls -A "$ACL_DIR" 2>/dev/null)" ]; then
+    echo "[init] First run — creating wildcard access entry (no auth required)"
+    mkdir -p "$ACL_DIR"
+    # UUID is static so it's idempotent if entrypoint runs twice
+    cat > "${ACL_DIR}/4d1c5e2a9f0b3e8d7c6a1b2f4e3d5c9a" << 'ACLEOF'
+{
+    "index": 0,
+    "enabled": true,
+    "username": "*",
+    "prefix": "0.0.0.0/0,::/0",
+    "webui": true,
+    "admin": true,
+    "streaming": ["basic","advanced","htsp"],
+    "dvr": ["basic","htsp","all","all_rw","failed"],
+    "htsp_anonymize": false,
+    "conn_limit_type": 0,
+    "conn_limit": 0,
+    "channel_min": 0,
+    "channel_max": 0,
+    "channel_tag_exclude": false,
+    "comment": "Default open access — disable this entry to enable authentication"
+}
+ACLEOF
+    chown -R tvheadend:tvheadend "$ACL_DIR"
+    echo "[init] Wildcard entry created. To require login: disable it in"
+    echo "[init] Configuration → Users → Access Entries and create your own user."
+fi
 
 echo "[init] uid=$(id -u tvheadend) gid=$(id -g tvheadend) tz=${TZ:-UTC}"
 
-# ── First-run detection ───────────────────────────────────────────────────────
-# If there is no accesscontrol config yet, pass --noacl so TVHeadend starts
-# with open access (matching the old LinuxServer behavior). Once you save
-# any access rule in the WebUI the file appears and --noacl is no longer added.
-TVH_EXTRA_FLAGS=""
-if [ ! -f /var/lib/tvheadend/accesscontrol/a* ] 2>/dev/null \
-   && [ -z "$(ls /var/lib/tvheadend/accesscontrol/ 2>/dev/null)" ]; then
-    echo "[init] No accesscontrol config found — starting with --noacl (open access)"
-    TVH_EXTRA_FLAGS="--noacl"
-fi
-
 # ── Drop privileges and exec tvheadend ───────────────────────────────────────
 exec su-exec tvheadend tvheadend \
-    --config /var/lib/tvheadend \
+    --config "${TVH_DATA}" \
     --http_port 9981 \
     --htsp_port 9982 \
-    $TVH_EXTRA_FLAGS \
     "$@"

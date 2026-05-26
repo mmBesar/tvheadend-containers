@@ -3,6 +3,10 @@
 # TVHeadend — built from source on Alpine Linux edge
 # Supports: linux/amd64, linux/arm64, linux/riscv64
 #
+# Builds from OUR mirrored branches — never fetches from upstream directly:
+#   TVH source   → our `upstream` branch      (synced from tvheadend/tvheadend)
+#   dashdrm plugin → our `streamlink-drm` branch (synced from titus-au/streamlink-plugin-dashdrm)
+#
 # Runtime env vars:
 #   PUID  — UID to run tvheadend as (default: 1000)
 #   PGID  — GID to run tvheadend as (default: 1000)
@@ -11,12 +15,15 @@
 ARG ALPINE_VERSION="edge"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 1: TVHeadend — compile from our upstream branch
+# Stage 1: TVHeadend — compile from our `upstream` branch
 # ─────────────────────────────────────────────────────────────────────────────
 FROM alpine:${ALPINE_VERSION} AS tvh-builder
 
-ARG TVH_REPO="https://github.com/tvheadend/tvheadend"
-ARG TVH_REF="master"
+# Both args are overridden at build time by container-build.yml to point at
+# our repo + the resolved `upstream` branch HEAD. Defaults here are the
+# fallback for local `docker build` without passing --build-arg.
+ARG TVH_REPO="https://github.com/mmBesar/tvheadend-containers"
+ARG TVH_REF="upstream"
 ARG TARGETARCH
 
 WORKDIR /src
@@ -47,11 +54,10 @@ RUN apk add --no-cache \
       apk add --no-cache libhdhomerun-dev; \
     fi
 
-RUN git clone --depth 1 --branch "${TVH_REF}" "${TVH_REPO}" /src \
- || git clone "${TVH_REPO}" /src \
+# Clone then checkout — supports both branch names and full SHAs
+RUN git clone "${TVH_REPO}" /src \
  && cd /src \
- && git fetch origin "${TVH_REF}" \
- && git checkout FETCH_HEAD \
+ && git checkout "${TVH_REF}" \
  && git submodule update --init --depth 1
 
 RUN cd /src \
@@ -84,15 +90,18 @@ RUN cd /src \
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2: streamlink builder
 #
-# Uses official streamlink + streamlink-plugin-dashdrm (a proper plugin,
-# not a fork). No lxml conflicts, no version collisions, no --no-deps hacks.
+# Official streamlink + dashdrm plugin from our `streamlink-drm` branch.
+# The plugin is installed directly into streamlink's own plugins directory
+# inside site-packages — streamlink finds it automatically with no flags.
 # gcc + python3-dev present to compile pycryptodome on arches with no wheel.
 # ─────────────────────────────────────────────────────────────────────────────
 FROM alpine:${ALPINE_VERSION} AS streamlink-builder
 
 ARG TARGETARCH
-ARG DASHDRM_REPO="https://github.com/mmBesar/streamlink-drm"
-ARG DASHDRM_REF="master"
+# Both args overridden at build time by container-build.yml.
+# Defaults point at our repo + our streamlink-drm branch.
+ARG DASHDRM_REPO="https://github.com/mmBesar/tvheadend-containers"
+ARG DASHDRM_REF="streamlink-drm"
 
 RUN apk add --no-cache \
       gcc \
@@ -106,7 +115,7 @@ RUN apk add --no-cache \
 # Install official streamlink
 RUN pip install --break-system-packages streamlink
 
-# Install pycryptodome (needed by dashdrm for ClearKey decryption)
+# Install pycryptodome (needed by dashdrm for ClearKey decryption).
 # On riscv64 there is no PyPI wheel — try RISE pre-built index first,
 # gcc compiles from source as fallback.
 RUN if [ "$TARGETARCH" = "riscv64" ]; then \
@@ -117,23 +126,26 @@ RUN if [ "$TARGETARCH" = "riscv64" ]; then \
       pip install --break-system-packages pycryptodome; \
     fi
 
-# Clone our mirror of streamlink-drm plugin and install it as a sideloaded plugin.
-# streamlink looks for plugins in ~/.local/share/streamlink/plugins/ by default,
-# but we install to /usr/local/share/streamlink/plugins/ so it's system-wide.
-RUN git clone "${DASHDRM_REPO}" /dashdrm \
+# Clone our streamlink-drm branch and install the plugin directly into
+# streamlink's built-in plugins directory inside site-packages.
+# This makes it load automatically — no --plugin-dir flag ever needed.
+RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
+ && PLUGIN_DIR="${SITE}/streamlink/plugins" \
+ && git clone "${DASHDRM_REPO}" /dashdrm \
  && cd /dashdrm \
  && git checkout "${DASHDRM_REF}" \
- && mkdir -p /usr/local/share/streamlink/plugins \
- && cp /dashdrm/dashdrm/*.py /usr/local/share/streamlink/plugins/
+ && cp /dashdrm/dashdrm/dashdrm.py "${PLUGIN_DIR}/dashdrm.py" \
+ && echo "dashdrm plugin installed to ${PLUGIN_DIR}/dashdrm.py" \
+ # Verify streamlink sees the plugin automatically
+ && streamlink --plugins | grep -i dashdrm \
+ && echo "dashdrm auto-discovered OK"
 
-# Snapshot everything for the runner stage
+# Snapshot packages and binary for the runner stage
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
- && mkdir -p /export/site-packages /export/bin /export/plugins \
+ && mkdir -p /export/site-packages /export/bin \
  && cp -a "${SITE}/." /export/site-packages/ \
  && cp "$(which streamlink)" /export/bin/streamlink \
- && cp /usr/local/share/streamlink/plugins/*.py /export/plugins/ \
- && echo "streamlink: $(streamlink --version)" \
- && python3 -c "import streamlink; print('streamlink importable OK')"
+ && echo "streamlink: $(streamlink --version)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 3: runner — minimal runtime image
@@ -182,19 +194,21 @@ RUN apk add --no-cache \
 # TVHeadend compiled binary + bundled web UI data
 COPY --from=tvh-builder /tvheadend /
 
-# Streamlink: copy snapshot into correct versioned site-packages path
+# Streamlink: copy snapshot into the correct versioned site-packages path.
+# dashdrm.py is already inside site-packages/streamlink/plugins/ so it comes
+# along automatically — no separate plugin copy step needed.
 COPY --from=streamlink-builder /export/site-packages/ /streamlink-pkgs/
 COPY --from=streamlink-builder /export/bin/streamlink /usr/local/bin/streamlink
-COPY --from=streamlink-builder /export/plugins/       /usr/local/share/streamlink/plugins/
 
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
  && cp -a /streamlink-pkgs/. "${SITE}/" \
  && rm -rf /streamlink-pkgs \
- && python3 -c "import streamlink; print('streamlink OK')" \
+ # Final verification: streamlink runs and dashdrm is auto-discovered
  && streamlink --version \
- && echo "dashdrm plugin installed at /usr/local/share/streamlink/plugins/"
+ && streamlink --plugins | grep -i dashdrm \
+ && echo "All OK"
 
-# Entrypoint: PUID/PGID/TZ/device-groups/first-run --noacl
+# Entrypoint: PUID/PGID remapping, TZ, device groups, first-run ACL setup
 COPY support/container-entrypoint.sh /init
 RUN chmod +x /init
 

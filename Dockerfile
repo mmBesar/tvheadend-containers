@@ -90,18 +90,20 @@ RUN cd /src \
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2: streamlink builder
 #
-# Official streamlink + dashdrm plugin from our `streamlink-drm` branch.
-# The plugin is installed directly into streamlink's own plugins directory
-# inside site-packages — streamlink finds it automatically with no flags.
+# Official streamlink + dashdrm + hlsdrm plugins.
+# Plugins go to /usr/local/share/streamlink/plugins/ — the XDG system-wide
+# sideload path that streamlink scans automatically on every invocation.
+# A system-wide config at /etc/streamlink/streamlinkrc sets plugin-dir
+# permanently so no --plugin-dir is ever needed in TVHeadend pipe commands.
 # gcc + python3-dev present to compile pycryptodome on arches with no wheel.
 # ─────────────────────────────────────────────────────────────────────────────
 FROM alpine:${ALPINE_VERSION} AS streamlink-builder
 
 ARG TARGETARCH
-# Both args overridden at build time by container-build.yml.
-# Defaults point at our repo + our streamlink-drm branch.
 ARG DASHDRM_REPO="https://github.com/mmBesar/tvheadend-containers"
-ARG DASHDRM_REF="streamlink-drm"
+ARG DASHDRM_REF="sl-dashdrm"
+ARG HLSDRM_REPO="https://github.com/mmBesar/tvheadend-containers"
+ARG HLSDRM_REF="sl-hlsdrm"
 
 RUN apk add --no-cache \
       gcc \
@@ -115,7 +117,7 @@ RUN apk add --no-cache \
 # Install official streamlink
 RUN pip install --break-system-packages streamlink
 
-# Install pycryptodome (needed by dashdrm for ClearKey decryption).
+# Install pycryptodome (needed by both drm plugins for ClearKey decryption).
 # On riscv64 there is no PyPI wheel — try RISE pre-built index first,
 # gcc compiles from source as fallback.
 RUN if [ "$TARGETARCH" = "riscv64" ]; then \
@@ -126,26 +128,37 @@ RUN if [ "$TARGETARCH" = "riscv64" ]; then \
       pip install --break-system-packages pycryptodome; \
     fi
 
-# Clone our streamlink-drm branch and install the plugin into streamlink's
-# site-packages plugins directory so it auto-loads with no --plugin-dir needed.
-# File is at dashdrm/dashdrm.py inside the repo.
-RUN git clone "${DASHDRM_REPO}" /dashdrm \
- && cd /dashdrm \
- && git checkout "${DASHDRM_REF}"
+# Create the system-wide sideload directory
+RUN mkdir -p /usr/local/share/streamlink/plugins
 
-# Install dashdrm.py into streamlink's plugins directory
-RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
- && PLUGIN_DIR="${SITE}/streamlink/plugins" \
- && echo "Target: ${PLUGIN_DIR}" \
- && cp /dashdrm/dashdrm/dashdrm.py "${PLUGIN_DIR}/dashdrm.py" \
- && ls -la "${PLUGIN_DIR}/dashdrm.py" \
- && echo "dashdrm install OK"
+# Clone and install dashdrm plugin
+# File is at dashdrm/dashdrm.py inside the repo
+RUN git clone "${DASHDRM_REPO}" /tmp/dashdrm \
+ && cd /tmp/dashdrm \
+ && git checkout "${DASHDRM_REF}" \
+ && cp /tmp/dashdrm/dashdrm/dashdrm.py /usr/local/share/streamlink/plugins/dashdrm.py \
+ && rm -rf /tmp/dashdrm \
+ && echo "dashdrm installed OK"
 
-# Snapshot packages and binary for the runner stage
+# Clone and install hlsdrm plugin
+# File is at hlsdrm/hlsdrm.py inside the repo (same structure as dashdrm)
+RUN git clone "${HLSDRM_REPO}" /tmp/hlsdrm \
+ && cd /tmp/hlsdrm \
+ && git checkout "${HLSDRM_REF}" \
+ && find /tmp/hlsdrm -name "*.py" -not -path "*/.git/*" \
+ && cp /tmp/hlsdrm/hlsdrm/hlsdrm.py /usr/local/share/streamlink/plugins/hlsdrm.py \
+ && rm -rf /tmp/hlsdrm \
+ && echo "hlsdrm installed OK"
+
+# Verify both plugin files are in place
+RUN ls -la /usr/local/share/streamlink/plugins/
+
+# Snapshot packages, binary, and plugins for the runner stage
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
- && mkdir -p /export/site-packages /export/bin \
+ && mkdir -p /export/site-packages /export/bin /export/plugins \
  && cp -a "${SITE}/." /export/site-packages/ \
  && cp "$(which streamlink)" /export/bin/streamlink \
+ && cp /usr/local/share/streamlink/plugins/*.py /export/plugins/ \
  && echo "streamlink: $(streamlink --version)"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -196,17 +209,25 @@ RUN apk add --no-cache \
 COPY --from=tvh-builder /tvheadend /
 
 # Streamlink: copy snapshot into the correct versioned site-packages path.
-# dashdrm.py is already inside site-packages/streamlink/plugins/ so it comes
-# along automatically — no separate plugin copy step needed.
 COPY --from=streamlink-builder /export/site-packages/ /streamlink-pkgs/
 COPY --from=streamlink-builder /export/bin/streamlink /usr/local/bin/streamlink
+
+# Plugins go to the XDG system-wide sideload path — streamlink scans this
+# directory automatically on every invocation, no --plugin-dir needed.
+COPY --from=streamlink-builder /export/plugins/ /usr/local/share/streamlink/plugins/
+
+# System-wide streamlink config — sets plugin-dir permanently so any
+# invocation (including TVHeadend pipe commands) auto-loads the plugins.
+RUN mkdir -p /etc/streamlink
+COPY support/streamlinkrc /etc/streamlink/streamlinkrc
 
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
  && cp -a /streamlink-pkgs/. "${SITE}/" \
  && rm -rf /streamlink-pkgs \
- # Verify streamlink runs and dashdrm.py landed in the right place
  && streamlink --version \
- && ls -la "${SITE}/streamlink/plugins/dashdrm.py" \
+ && ls -la /usr/local/share/streamlink/plugins/ \
+ && streamlink --can-handle-url "dashdrm://http://test.com/test.mpd" && echo "dashdrm OK" \
+ && streamlink --can-handle-url "hlsdrm://http://test.com/test.m3u8" && echo "hlsdrm OK" \
  && echo "All OK"
 
 # Entrypoint: PUID/PGID remapping, TZ, device groups, first-run ACL setup

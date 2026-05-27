@@ -1,0 +1,88 @@
+# .github/workflows/sl-dashdrm-sync.yml
+#
+# Mirrors ImAleeexx/sl-dashdrm → our `sl-dashdrm` branch.
+# The Dockerfile builds from this branch, not the original repo,
+# so we are never at risk if the original is deleted or goes private.
+
+name: Sync — sl-dashdrm Mirror
+
+on:
+  schedule:
+    - cron: "30 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-sync-sl-dashdrm
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      updated: ${{ steps.compare.outputs.updated }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream sl-dashdrm
+        id: fetch
+        run: |
+          git remote add sldrm https://github.com/titus-au/streamlink-plugin-dashdrm.git || true
+          git fetch sldrm main --no-tags
+          SHA=$(git rev-parse sldrm/main)
+          echo "upstream_sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Compare with our sl-dashdrm branch
+        id: compare
+        run: |
+          if git ls-remote --exit-code origin refs/heads/sl-dashdrm; then
+            git fetch origin sl-dashdrm
+            OUR=$(git rev-parse origin/sl-dashdrm)
+            if [ "$OUR" = "${{ steps.fetch.outputs.upstream_sha }}" ]; then
+              echo "No changes in sl-dashdrm upstream."
+              echo "updated=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+
+      - name: Update sl-dashdrm branch
+        if: steps.compare.outputs.updated == 'true'
+        run: |
+          git checkout -B sl-dashdrm sldrm/main
+          # Strip any .github/ from upstream to keep our workflows clean
+          if [ -d .github ]; then
+            git rm -rf .github/ --quiet
+            git commit -m "chore: strip upstream .github/ [bot]"
+          fi
+          git push origin sl-dashdrm --force-with-lease
+          echo "sl-dashdrm branch updated to ${{ steps.fetch.outputs.upstream_sha }}"
+
+  trigger-build:
+    needs: sync
+    if: needs.sync.outputs.updated == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch container-build
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              event_type: 'upstream-release',
+              client_payload: { source: 'sl-dashdrm' }
+            });

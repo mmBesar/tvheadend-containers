@@ -3,7 +3,7 @@
 # Syncs tvheadend/tvheadend:master → our `upstream` branch.
 # Dispatches a build event when new commits are detected.
 
-name: Sync — TVHeadend Upstream
+name: Sync — TVHeadend
 
 on:
   schedule:
@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: upstream-sync-tvh
+  group: sync-tvheadend
   cancel-in-progress: true
 
 jobs:
@@ -47,9 +47,9 @@ jobs:
       - name: Compare with our upstream branch
         id: compare
         run: |
-          if git ls-remote --exit-code origin refs/heads/upstream; then
+          if git ls-remote --exit-code origin refs/heads/tvheadend; then
             git fetch origin upstream
-            OUR=$(git rev-parse origin/upstream)
+            OUR=$(git rev-parse origin/tvheadend)
             if [ "$OUR" = "${{ steps.fetch.outputs.upstream_sha }}" ]; then
               echo "updated=false" >> "$GITHUB_OUTPUT"
               exit 0
@@ -60,13 +60,13 @@ jobs:
       - name: Update upstream branch
         if: steps.compare.outputs.updated == 'true'
         run: |
-          git checkout -B upstream upstream/master
+          git checkout -B tvheadend upstream/master
           # Strip upstream's .github/ — must never interfere with our workflows
           if [ -d .github ]; then
             git rm -rf .github/ --quiet
             git commit -m "chore: strip upstream .github/ [bot]"
           fi
-          git push origin upstream --force-with-lease
+          git push origin tvheadend --force-with-lease
 
   trigger-build:
     needs: sync

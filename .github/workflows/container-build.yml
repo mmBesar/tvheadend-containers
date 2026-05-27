@@ -50,6 +50,7 @@ jobs:
       short_sha:       ${{ steps.sha.outputs.short }}
       tvh_ref:         ${{ steps.refs.outputs.tvh_ref }}
       dashdrm_ref:     ${{ steps.refs.outputs.dashdrm_ref }}
+      hlsdrm_ref:      ${{ steps.refs.outputs.hlsdrm_ref }}
 
     steps:
       - name: Checkout
@@ -71,8 +72,8 @@ jobs:
         id: refs
         run: |
           # TVHeadend: build from our upstream branch if it exists, else master
-          if git ls-remote --exit-code origin refs/heads/upstream; then
-            TVH_REF="upstream"
+          if git ls-remote --exit-code origin refs/heads/tvheadend; then
+            TVH_REF="tvheadend"
             echo "Building TVHeadend from our upstream branch (${TVH_REF::8})"
           else
             TVH_REF="master"
@@ -81,8 +82,8 @@ jobs:
           echo "tvh_ref=${TVH_REF}" >> "$GITHUB_OUTPUT"
 
           # streamlink-drm plugin: build from our mirror branch if it exists
-          if git ls-remote --exit-code origin refs/heads/streamlink-drm; then
-            DASHDRM_REF="streamlink-drm"
+          if git ls-remote --exit-code origin refs/heads/sl-dashdrm; then
+            DASHDRM_REF="sl-dashdrm"
             DASHDRM_REPO="https://github.com/$GITHUB_REPOSITORY"
             echo "Building dashdrm from our streamlink-drm branch (${DASHDRM_REF::8})"
           else
@@ -92,6 +93,16 @@ jobs:
           fi
           echo "dashdrm_ref=${DASHDRM_REF}" >> "$GITHUB_OUTPUT"
           echo "dashdrm_repo=${DASHDRM_REPO}" >> "$GITHUB_OUTPUT"
+
+          # hlsdrm plugin: build from our mirror branch if it exists
+          if git ls-remote --exit-code origin refs/heads/sl-hlsdrm; then
+            HLSDRM_REF="sl-hlsdrm"
+            echo "Building hlsdrm from our sl-hlsdrm branch"
+          else
+            HLSDRM_REF="main"
+            echo "sl-hlsdrm branch not yet created — building from upstream titus-au"
+          fi
+          echo "hlsdrm_ref=${HLSDRM_REF}" >> "$GITHUB_OUTPUT"
 
       - name: Check built-tags ledger
         id: ledger
@@ -169,6 +180,8 @@ jobs:
             TVH_REF=${{ needs.check.outputs.tvh_ref }}
             DASHDRM_REPO=https://github.com/${{ github.repository }}
             DASHDRM_REF=${{ needs.check.outputs.dashdrm_ref }}
+            HLSDRM_REPO=https://github.com/${{ github.repository }}
+            HLSDRM_REF=${{ needs.check.outputs.hlsdrm_ref }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to:   type=gha,mode=max,scope=${{ matrix.arch }}

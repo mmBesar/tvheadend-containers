@@ -1,13 +1,14 @@
 # TVHeadend + Streamlink Container
 
 [![Build & Push Multi-Arch Image](https://github.com/mmBesar/tvheadend-containers/actions/workflows/container-build.yml/badge.svg)](https://github.com/mmBesar/tvheadend-containers/actions/workflows/container-build.yml)
-[![Sync — TVHeadend Upstream](https://github.com/mmBesar/tvheadend-containers/actions/workflows/upstream-sync.yml/badge.svg)](https://github.com/mmBesar/tvheadend-containers/actions/workflows/upstream-sync.yml)
-[![Sync — streamlink-drm Mirror](https://github.com/mmBesar/tvheadend-containers/actions/workflows/streamlink-drm-sync.yml/badge.svg)](https://github.com/mmBesar/tvheadend-containers/actions/workflows/streamlink-drm-sync.yml)
+[![Sync — TVHeadend](https://github.com/mmBesar/tvheadend-containers/actions/workflows/sync-tvheadend.yml/badge.svg)](https://github.com/mmBesar/tvheadend-containers/actions/workflows/sync-tvheadend.yml)
+[![Sync — sl-dashdrm](https://github.com/mmBesar/tvheadend-containers/actions/workflows/sync-sl-dashdrm.yml/badge.svg)](https://github.com/mmBesar/tvheadend-containers/actions/workflows/sync-sl-dashdrm.yml)
+[![Sync — sl-hlsdrm](https://github.com/mmBesar/tvheadend-containers/actions/workflows/sync-sl-hlsdrm.yml/badge.svg)](https://github.com/mmBesar/tvheadend-containers/actions/workflows/sync-sl-hlsdrm.yml)
 [![GitHub Container Registry](https://img.shields.io/badge/GHCR-ghcr.io%2Fmmbesar%2Ftvheadend--containers-blue?logo=github)](https://github.com/mmBesar/tvheadend-containers/pkgs/container/tvheadend-containers)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-TVHeadend compiled from source on Alpine Linux edge, with streamlink and
-the dashdrm plugin included. All three architectures built natively — no QEMU.
+TVHeadend compiled from source on Alpine Linux edge, with streamlink, dashdrm,
+and hlsdrm plugins included. All three architectures built natively — no QEMU.
 
 ## Supported architectures
 
@@ -32,7 +33,7 @@ services:
   tvheadend:
     image: ghcr.io/mmbesar/tvheadend-containers:latest
     container_name: tvheadend
-    network_mode: host          # required for IPTV multicast
+    network_mode: host
     environment:
       PUID: 1000
       PGID: 1000
@@ -48,20 +49,68 @@ services:
 
 ## Authentication
 
-On first start, a wildcard access entry (`*`) is created automatically —
-**no login is required by default**, exactly like the classic LinuxServer image.
+On first start a wildcard `*` access entry is created — no login required by
+default, matching classic LinuxServer behavior.
 
 **To enable authentication:**
-1. Open the WebUI → **Configuration → Users → Access Entries**
-2. Create your own user with a username and password under **Configuration → Users → Passwords**
+1. Create your user under **Configuration → Users → Passwords**
+2. Create an access entry under **Configuration → Users → Access Entries**
 3. Disable or delete the `*` wildcard entry
-4. From this point on, TVHeadend will require login
 
-**To go back to open access:** re-enable the `*` entry, or create a new one
-with username `*` and prefix `0.0.0.0/0`.
+## Streamlink plugins
 
-The wildcard entry is only created on a genuine first run (empty config
-directory). Existing installs are never touched.
+Both plugins are **automatically loaded** on every `streamlink` invocation —
+no `--plugin-dir` flag needed anywhere. A system-wide config at
+`/etc/streamlink/streamlinkrc` sets the plugin directory permanently.
+
+### dashdrm — DASH streams with DRM/ClearKey
+
+For DASH `.mpd` streams (including encrypted ones):
+
+```
+pipe:///usr/bin/env streamlink --stdout \
+  --http-header "User-Agent=Mozilla/5.0" \
+  --http-header "Referer=https://example.com/" \
+  --http-header "Origin=https://example.com" \
+  --dashdrm-decryption-key "KID:KEY_IN_HEX" \
+  --ffmpeg-ffmpeg "/usr/bin/ffmpeg" \
+  --ffmpeg-fout "mpegts" \
+  --default-stream best \
+  --url "dashdrm://https://example.com/manifest.mpd"
+```
+
+For unencrypted DASH streams, omit `--dashdrm-decryption-key`.
+
+### hlsdrm — HLS streams with DRM/ClearKey
+
+For HLS `.m3u8` streams (including encrypted ones):
+
+```
+pipe:///usr/bin/env streamlink --stdout \
+  --http-header "User-Agent=Mozilla/5.0" \
+  --http-header "Referer=https://example.com/" \
+  --http-header "Origin=https://example.com" \
+  --hlsdrm-decryption-key "KID:KEY_IN_HEX" \
+  --ffmpeg-ffmpeg "/usr/bin/ffmpeg" \
+  --ffmpeg-fout "mpegts" \
+  --default-stream best \
+  --url "hlsdrm://https://example.com/stream.m3u8"
+```
+
+### Shahid MBC example (DASH + DRM)
+
+```
+pipe:///usr/bin/env streamlink --stdout \
+  --http-header "User-Agent=Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0" \
+  --http-header "Referer=https://shahid.mbc.net/" \
+  --http-header "Origin=https://shahid.mbc.net" \
+  --dashdrm-decryption-key "17774f82a3b9e33ea7a149596acbb20f" \
+  --stream-sorting-excludes ">576p+a193k" \
+  --ffmpeg-ffmpeg "/usr/bin/ffmpeg" \
+  --ffmpeg-fout "mpegts" \
+  --default-stream best \
+  --url "dashdrm://https://shd-gcp-live.lg.mncdn.com/live/bitmovin-mbc-2/51db9d7fa48a27d051f1eecb68069151/index.mpd"
+```
 
 ## Ports
 
@@ -71,54 +120,28 @@ directory). Existing installs are never touched.
 | `9982` | HTSP | Kodi / client apps |
 | `9983` | HTTPS | WebUI (TLS) |
 
-## Streamlink & DRM streams
-
-This image includes [streamlink](https://streamlink.github.io) and the
-[dashdrm plugin](https://github.com/titus-au/streamlink-plugin-dashdrm)
-for DRM-protected streams.
-
-The dashdrm plugin is a **sideloaded streamlink plugin** — not a separate
-binary. You use `streamlink` as normal; the plugin is loaded automatically
-and adds support for DASH streams with ClearKey/Widevine DRM.
-
-```bash
-# Regular stream
-streamlink https://example.com/stream best
-
-# DRM stream (dashdrm plugin handles it transparently)
-streamlink https://example.com/drm-stream best
-```
-
-In TVHeadend, configure your IPTV network pipe command as:
-```
-streamlink --stdout {url} best
-```
-
 ## riscv64 notes
 
 `libhdhomerun` is not available in Alpine for riscv64. TVHeadend is built
-with `--disable-hdhomerun_client` on that arch. Everything else — DVB-CSA,
-IPTV, SAT>IP, streamlink — works normally.
+with `--disable-hdhomerun_client` on that arch. Everything else works normally.
 
-## Workflows
+## Branches & Workflows
 
-| Workflow | Schedule | Purpose |
-|----------|----------|---------|
-| `upstream-sync.yml` | Every 6h | Mirrors `tvheadend/tvheadend:master` → our `upstream` branch |
-| `streamlink-drm-sync.yml` | Every 6h (offset) | Mirrors dashdrm plugin → our `streamlink-drm` branch |
-| `container-build.yml` | On push / dispatch | Builds all three arches natively; creates multi-arch manifest |
+| Branch | Mirrors | Sync Workflow |
+|--------|---------|---------------|
+| `tvheadend` | `tvheadend/tvheadend:master` | `sync-tvheadend.yml` every 6h |
+| `sl-dashdrm` | `titus-au/streamlink-plugin-dashdrm:main` | `sync-sl-dashdrm.yml` every 6h |
+| `sl-hlsdrm` | `titus-au/streamlink-plugin-hlsdrm:main` | `sync-sl-hlsdrm.yml` every 6h |
 
 Builds always use our own mirrored branches — never fetches from upstream
 at build time — so builds are reproducible and resilient to upstream outages.
 
 ## RISE RISC-V Runners
 
-The riscv64 build requires the **RISE RISC-V Runners** GitHub App.
-Install it at [risev-runners.org](https://risev-runners.org).
+Install the **RISE RISC-V Runners** GitHub App at [risev-runners.org](https://risev-runners.org).
 
 > If you delete and recreate this repo, re-authorize the RISE app under
-> **Settings → Integrations → GitHub Apps** — it binds to the repo's internal
-> ID, not its name.
+> **Settings → Integrations → GitHub Apps**.
 
 ---
 
@@ -129,5 +152,6 @@ Install it at [risev-runners.org](https://risev-runners.org).
 | [TVHeadend](https://github.com/tvheadend/tvheadend) | TVHeadend Project | GPL-3.0 |
 | [streamlink](https://github.com/streamlink/streamlink) | Streamlink Team | BSD-2-Clause |
 | [streamlink-plugin-dashdrm](https://github.com/titus-au/streamlink-plugin-dashdrm) | titus-au | BSD-2-Clause |
+| [streamlink-plugin-hlsdrm](https://github.com/titus-au/streamlink-plugin-hlsdrm) | titus-au | BSD-2-Clause |
 | [Alpine Linux](https://alpinelinux.org) | Alpine Linux Team | Various |
 | [RISE RISC-V Runners](https://risev-runners.org) | RISE Project | — |

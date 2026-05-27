@@ -217,26 +217,39 @@ RUN apk add --no-cache \
 # TVHeadend compiled binary + bundled web UI data
 COPY --from=tvh-builder /tvheadend /
 
-# Streamlink: copy snapshot into the correct versioned site-packages path.
+# ── Streamlink: install packages, binary, and plugins ────────────────────────
+
+# Copy Python packages from builder into system site-packages
 COPY --from=streamlink-builder /export/site-packages/ /streamlink-pkgs/
 COPY --from=streamlink-builder /export/bin/streamlink /usr/local/bin/streamlink
 
-# Plugins go to the XDG system-wide sideload path — streamlink scans this
-# directory automatically on every invocation, no --plugin-dir needed.
+# Plugin files — stored here, referenced from everywhere else via symlinks
 COPY --from=streamlink-builder /export/plugins/ /usr/local/share/streamlink/plugins/
 
-# NOTE: streamlink config is written at runtime by container-entrypoint.sh
-# to $HOME/.config/streamlink/config (the correct XDG path).
-# /etc/streamlink/ is not a valid streamlink config location — ignored.
-
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
+ # Install Python packages
  && cp -a /streamlink-pkgs/. "${SITE}/" \
  && rm -rf /streamlink-pkgs \
+ # ── root user setup (baked in — root home is never a volume) ─────────────
+ # Config: tells streamlink where to find plugins via plugin-dir
+ && mkdir -p /root/.config/streamlink \
+ && printf 'plugin-dir=/usr/local/share/streamlink/plugins\n' \
+      > /root/.config/streamlink/config \
+ # XDG sideload path: symlinks for auto-discovery without any CLI flag
+ && mkdir -p /root/.local/share/streamlink/plugins \
+ && ln -snf /usr/local/share/streamlink/plugins/dashdrm.py \
+            /root/.local/share/streamlink/plugins/dashdrm.py \
+ && ln -snf /usr/local/share/streamlink/plugins/hlsdrm.py \
+            /root/.local/share/streamlink/plugins/hlsdrm.py \
+ # ── verify ───────────────────────────────────────────────────────────────
  && streamlink --version \
- && ls -la /usr/local/share/streamlink/plugins/ \
  && streamlink --can-handle-url "dashdrm://http://test.com/test.mpd" && echo "dashdrm OK" \
  && streamlink --can-handle-url "hlsdrm://http://test.com/test.m3u8" && echo "hlsdrm OK" \
- && echo "All OK"
+ && echo "streamlink setup complete"
+
+# NOTE: tvheadend user config and symlinks are written by the entrypoint at
+# runtime, because /var/lib/tvheadend is a mounted volume and does not exist
+# at image build time."
 
 # Entrypoint: PUID/PGID remapping, TZ, device groups, first-run ACL setup
 COPY support/container-entrypoint.sh /init

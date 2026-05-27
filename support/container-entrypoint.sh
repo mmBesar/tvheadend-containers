@@ -56,42 +56,29 @@ chown -R tvheadend:tvheadend \
     "${TVH_DATA}" \
     /var/log/tvheadend
 
-# ── Streamlink — config file and auto sideloading ────────────────────────────
+# ── Streamlink — tvheadend user setup ────────────────────────────────────────
+# The root user config is baked into the image (Dockerfile) since /root is
+# never a volume. Here we set up the tvheadend user's home which is a mounted
+# volume and only exists at runtime.
+#
 # Docs: https://streamlink.github.io/cli/config.html
 #       https://streamlink.github.io/cli/plugin-sideloading.html
 #
-# streamlink resolves paths relative to HOME of whichever user runs it:
-#   Config:    $HOME/.config/streamlink/config        (XDG_CONFIG_HOME)
-#   Sideload:  $HOME/.local/share/streamlink/plugins  (XDG_DATA_HOME, auto-scanned)
-#
-# docker exec runs as root (HOME=/root), TVHeadend spawns streamlink as the
-# tvheadend user (HOME=/var/lib/tvheadend). We set up BOTH homes so that
-# both docker exec testing AND TVHeadend pipe commands work without --plugin-dir.
+# Config:    $HOME/.config/streamlink/config        (XDG_CONFIG_HOME)
+# Sideload:  $HOME/.local/share/streamlink/plugins  (XDG_DATA_HOME, auto-scanned)
 
-setup_streamlink() {
-    local HOME_DIR="$1"
-    local OWNER="$2"
+# Config file
+mkdir -p "${TVH_DATA}/.config/streamlink"
+printf 'plugin-dir=/usr/local/share/streamlink/plugins\n'     > "${TVH_DATA}/.config/streamlink/config"
 
-    # Config file
-    local CFG="${HOME_DIR}/.config/streamlink/config"
-    mkdir -p "$(dirname "$CFG")"
-    printf '# Streamlink config - managed by entrypoint\nplugin-dir=/usr/local/share/streamlink/plugins\n' > "$CFG"
+# XDG sideload path — symlink shipped plugins for auto-discovery
+mkdir -p "${TVH_DATA}/.local/share/streamlink/plugins"
+for PLUGIN in /usr/local/share/streamlink/plugins/*.py; do
+    ln -snf "$PLUGIN" "${TVH_DATA}/.local/share/streamlink/plugins/$(basename "$PLUGIN")"
+done
 
-    # XDG sideload path — symlink shipped plugins for auto-discovery
-    local SIDELOAD="${HOME_DIR}/.local/share/streamlink/plugins"
-    mkdir -p "$SIDELOAD"
-    for PLUGIN in /usr/local/share/streamlink/plugins/*.py; do
-        ln -snf "$PLUGIN" "${SIDELOAD}/$(basename "$PLUGIN")"
-    done
-
-    [ -n "$OWNER" ] && chown -R "$OWNER" "${HOME_DIR}/.config" "${HOME_DIR}/.local"
-    echo "[init] streamlink ready for ${HOME_DIR}"
-}
-
-# Set up for root (docker exec / testing)
-setup_streamlink /root ""
-# Set up for tvheadend user (TVHeadend pipe commands)
-setup_streamlink "${TVH_DATA}" "tvheadend:tvheadend"
+chown -R tvheadend:tvheadend     "${TVH_DATA}/.config"     "${TVH_DATA}/.local"
+echo "[init] streamlink ready for tvheadend user"
 
 
 # ── First-run: create wildcard access entry (no authentication by default) ───

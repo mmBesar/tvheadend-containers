@@ -60,29 +60,39 @@ chown -R tvheadend:tvheadend \
 # Docs: https://streamlink.github.io/cli/config.html
 #       https://streamlink.github.io/cli/plugin-sideloading.html
 #
-# For tvheadend user (HOME=/var/lib/tvheadend):
-#   Config:       $HOME/.config/streamlink/config     (sets plugin-dir fallback)
-#   Auto-sideload: $HOME/.local/share/streamlink/plugins  (scanned automatically)
+# streamlink resolves paths relative to HOME of whichever user runs it:
+#   Config:    $HOME/.config/streamlink/config        (XDG_CONFIG_HOME)
+#   Sideload:  $HOME/.local/share/streamlink/plugins  (XDG_DATA_HOME, auto-scanned)
 #
-# We symlink shipped plugins to the XDG data path so streamlink discovers them
-# with zero CLI flags. Config file is a belt-and-braces fallback.
-# Both are written on every start (idempotent).
+# docker exec runs as root (HOME=/root), TVHeadend spawns streamlink as the
+# tvheadend user (HOME=/var/lib/tvheadend). We set up BOTH homes so that
+# both docker exec testing AND TVHeadend pipe commands work without --plugin-dir.
 
-# 1. Config file
-STREAMLINK_CFG="${TVH_DATA}/.config/streamlink/config"
-mkdir -p "$(dirname "$STREAMLINK_CFG")"
-printf '# Streamlink config - managed by entrypoint\nplugin-dir=/usr/local/share/streamlink/plugins\n' > "$STREAMLINK_CFG"
+setup_streamlink() {
+    local HOME_DIR="$1"
+    local OWNER="$2"
 
-# 2. XDG sideload path — symlink shipped plugins so streamlink auto-discovers them
-STREAMLINK_PLUGINS="${TVH_DATA}/.local/share/streamlink/plugins"
-mkdir -p "$STREAMLINK_PLUGINS"
-for PLUGIN in /usr/local/share/streamlink/plugins/*.py; do
-    ln -snf "$PLUGIN" "${STREAMLINK_PLUGINS}/$(basename "$PLUGIN")"
-done
+    # Config file
+    local CFG="${HOME_DIR}/.config/streamlink/config"
+    mkdir -p "$(dirname "$CFG")"
+    printf '# Streamlink config - managed by entrypoint\nplugin-dir=/usr/local/share/streamlink/plugins\n' > "$CFG"
 
-chown -R tvheadend:tvheadend "${TVH_DATA}/.config" "${TVH_DATA}/.local"
-echo "[init] streamlink config: ${STREAMLINK_CFG}"
-echo "[init] streamlink plugins symlinked: $(ls /usr/local/share/streamlink/plugins/)"
+    # XDG sideload path — symlink shipped plugins for auto-discovery
+    local SIDELOAD="${HOME_DIR}/.local/share/streamlink/plugins"
+    mkdir -p "$SIDELOAD"
+    for PLUGIN in /usr/local/share/streamlink/plugins/*.py; do
+        ln -snf "$PLUGIN" "${SIDELOAD}/$(basename "$PLUGIN")"
+    done
+
+    [ -n "$OWNER" ] && chown -R "$OWNER" "${HOME_DIR}/.config" "${HOME_DIR}/.local"
+    echo "[init] streamlink ready for ${HOME_DIR}"
+}
+
+# Set up for root (docker exec / testing)
+setup_streamlink /root ""
+# Set up for tvheadend user (TVHeadend pipe commands)
+setup_streamlink "${TVH_DATA}" "tvheadend:tvheadend"
+
 
 # ── First-run: create wildcard access entry (no authentication by default) ───
 #

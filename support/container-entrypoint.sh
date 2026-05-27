@@ -56,6 +56,21 @@ chown -R tvheadend:tvheadend \
     "${TVH_DATA}" \
     /var/log/tvheadend
 
+# ── Streamlink config — write to the correct XDG path ───────────────────────
+# streamlink reads config from $HOME/.config/streamlink/config
+# ($HOME = /var/lib/tvheadend for the tvheadend user).
+# /etc/streamlink/ is NOT a valid streamlink config path — it is ignored.
+# We write this on every start (idempotent) so it survives volume mounts.
+STREAMLINK_CFG="${TVH_DATA}/.config/streamlink/config"
+mkdir -p "$(dirname "$STREAMLINK_CFG")"
+cat > "$STREAMLINK_CFG" << 'SLEOF'
+# Streamlink config — managed by container entrypoint, do not edit manually.
+# Loads dashdrm and hlsdrm plugins automatically on every streamlink invocation.
+plugin-dir=/usr/local/share/streamlink/plugins
+SLEOF
+chown -R tvheadend:tvheadend "${TVH_DATA}/.config"
+echo "[init] streamlink config written to ${STREAMLINK_CFG}"
+
 # ── First-run: create wildcard access entry (no authentication by default) ───
 #
 # Matches LinuxServer.io behaviour exactly:

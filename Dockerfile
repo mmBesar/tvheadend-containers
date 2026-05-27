@@ -153,12 +153,16 @@ RUN git clone "${HLSDRM_REPO}" /tmp/hlsdrm \
 # Verify both plugin files are in place
 RUN ls -la /usr/local/share/streamlink/plugins/
 
-# Snapshot packages, binary, and plugins for the runner stage
+# Snapshot packages and binary for the runner stage.
+# Plugins (dashdrm.py, hlsdrm.py) stay in /usr/local/share/streamlink/plugins/
+# and are copied directly from there — NOT from site-packages/streamlink/plugins/
+# which contains only built-in plugins and must never be used as plugin-dir.
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
  && mkdir -p /export/site-packages /export/bin /export/plugins \
  && cp -a "${SITE}/." /export/site-packages/ \
  && cp "$(which streamlink)" /export/bin/streamlink \
- && cp /usr/local/share/streamlink/plugins/*.py /export/plugins/ \
+ && cp /usr/local/share/streamlink/plugins/dashdrm.py /export/plugins/dashdrm.py \
+ && cp /usr/local/share/streamlink/plugins/hlsdrm.py  /export/plugins/hlsdrm.py \
  && echo "streamlink: $(streamlink --version)"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -177,6 +181,7 @@ RUN apk add --no-cache \
       avahi \
       bzip2 \
       dbus-libs \
+      ffmpeg \
       gnu-libiconv-libs \
       libcrypto3 \
       libdvbcsa \
@@ -216,10 +221,9 @@ COPY --from=streamlink-builder /export/bin/streamlink /usr/local/bin/streamlink
 # directory automatically on every invocation, no --plugin-dir needed.
 COPY --from=streamlink-builder /export/plugins/ /usr/local/share/streamlink/plugins/
 
-# System-wide streamlink config — sets plugin-dir permanently so any
-# invocation (including TVHeadend pipe commands) auto-loads the plugins.
-RUN mkdir -p /etc/streamlink
-COPY support/streamlinkrc /etc/streamlink/streamlinkrc
+# NOTE: streamlink config is written at runtime by container-entrypoint.sh
+# to $HOME/.config/streamlink/config (the correct XDG path).
+# /etc/streamlink/ is not a valid streamlink config location — ignored.
 
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
  && cp -a /streamlink-pkgs/. "${SITE}/" \

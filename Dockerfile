@@ -159,6 +159,10 @@ RUN ls -la /usr/local/share/streamlink/plugins/
 # which contains only built-in plugins and must never be used as plugin-dir.
 RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
  && mkdir -p /export/site-packages /export/bin /export/plugins \
+ # Remove plugin files from site-packages — they belong only in
+ # /usr/local/share/streamlink/plugins/ to avoid the "being overridden" double-load
+ && rm -f "${SITE}/streamlink/plugins/dashdrm.py" \
+ && rm -f "${SITE}/streamlink/plugins/hlsdrm.py" \
  && cp -a "${SITE}/." /export/site-packages/ \
  && cp "$(which streamlink)" /export/bin/streamlink \
  && cp /usr/local/share/streamlink/plugins/dashdrm.py /export/plugins/dashdrm.py \

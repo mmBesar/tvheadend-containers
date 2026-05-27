@@ -56,20 +56,33 @@ chown -R tvheadend:tvheadend \
     "${TVH_DATA}" \
     /var/log/tvheadend
 
-# ── Streamlink config — write to the correct XDG path ───────────────────────
-# streamlink reads config from $HOME/.config/streamlink/config
-# ($HOME = /var/lib/tvheadend for the tvheadend user).
-# /etc/streamlink/ is NOT a valid streamlink config path — it is ignored.
-# We write this on every start (idempotent) so it survives volume mounts.
+# ── Streamlink — config file and auto sideloading ────────────────────────────
+# Docs: https://streamlink.github.io/cli/config.html
+#       https://streamlink.github.io/cli/plugin-sideloading.html
+#
+# For tvheadend user (HOME=/var/lib/tvheadend):
+#   Config:       $HOME/.config/streamlink/config     (sets plugin-dir fallback)
+#   Auto-sideload: $HOME/.local/share/streamlink/plugins  (scanned automatically)
+#
+# We symlink shipped plugins to the XDG data path so streamlink discovers them
+# with zero CLI flags. Config file is a belt-and-braces fallback.
+# Both are written on every start (idempotent).
+
+# 1. Config file
 STREAMLINK_CFG="${TVH_DATA}/.config/streamlink/config"
 mkdir -p "$(dirname "$STREAMLINK_CFG")"
-cat > "$STREAMLINK_CFG" << 'SLEOF'
-# Streamlink config — managed by container entrypoint, do not edit manually.
-# Loads dashdrm and hlsdrm plugins automatically on every streamlink invocation.
-plugin-dir=/usr/local/share/streamlink/plugins
-SLEOF
-chown -R tvheadend:tvheadend "${TVH_DATA}/.config"
-echo "[init] streamlink config written to ${STREAMLINK_CFG}"
+printf '# Streamlink config - managed by entrypoint\nplugin-dir=/usr/local/share/streamlink/plugins\n' > "$STREAMLINK_CFG"
+
+# 2. XDG sideload path — symlink shipped plugins so streamlink auto-discovers them
+STREAMLINK_PLUGINS="${TVH_DATA}/.local/share/streamlink/plugins"
+mkdir -p "$STREAMLINK_PLUGINS"
+for PLUGIN in /usr/local/share/streamlink/plugins/*.py; do
+    ln -snf "$PLUGIN" "${STREAMLINK_PLUGINS}/$(basename "$PLUGIN")"
+done
+
+chown -R tvheadend:tvheadend "${TVH_DATA}/.config" "${TVH_DATA}/.local"
+echo "[init] streamlink config: ${STREAMLINK_CFG}"
+echo "[init] streamlink plugins symlinked: $(ls /usr/local/share/streamlink/plugins/)"
 
 # ── First-run: create wildcard access entry (no authentication by default) ───
 #

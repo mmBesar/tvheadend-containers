@@ -245,12 +245,9 @@ RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
 # runtime, because /var/lib/tvheadend is a mounted volume and does not exist
 # at image build time."
 
-# Picons — optional channel logos bundled in the image.
-# Path is inside /var/lib/tvheadend so everything user-facing is in one place.
-# Users can also drop picons directly into their mounted config folder.
-# Set in TVHeadend: Configuration → General → Base → Picon path → /var/lib/tvheadend/picons
-RUN mkdir -p /var/lib/tvheadend/picons
-COPY picons/ /var/lib/tvheadend/picons/
+# Picons directory is created at runtime by the entrypoint.
+# /var/lib/tvheadend is a volume — anything written here at build time
+# is discarded when the volume is mounted. See container-entrypoint.sh.
 
 # Entrypoint: PUID/PGID remapping, TZ, device groups, first-run ACL setup
 COPY support/container-entrypoint.sh /init

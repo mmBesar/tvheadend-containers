@@ -51,6 +51,11 @@ for DEV in $(find /dev/dvb /dev/dri -type c 2>/dev/null); do
     echo "[init] added tvheadend to group '${DEV_GROUP}' (gid=${DEV_GID}) for ${DEV}"
 done
 
+# ── Create runtime directories ───────────────────────────────────────────────
+# These must be created here because /var/lib/tvheadend is a mounted volume
+# and anything written there at Docker build time is discarded at runtime.
+install -d -m 775 -o tvheadend -g tvheadend     "${TVH_DATA}/recordings"     "${TVH_DATA}/picons"
+
 # ── Fix ownership on data directories ────────────────────────────────────────
 chown -R tvheadend:tvheadend \
     "${TVH_DATA}" \

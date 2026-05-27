@@ -91,10 +91,9 @@ RUN cd /src \
 # Stage 2: streamlink builder
 #
 # Official streamlink + dashdrm + hlsdrm plugins.
-# Plugins go to /usr/local/share/streamlink/plugins/ — the XDG system-wide
-# sideload path that streamlink scans automatically on every invocation.
-# A system-wide config at /etc/streamlink/streamlinkrc sets plugin-dir
-# permanently so no --plugin-dir is ever needed in TVHeadend pipe commands.
+# Plugins are installed to /usr/local/share/streamlink/plugins/ and loaded
+# via plugin-dir set in the streamlink config file — written at runtime by
+# the entrypoint for the tvheadend user, and baked into the image for root.
 # gcc + python3-dev present to compile pycryptodome on arches with no wheel.
 # ─────────────────────────────────────────────────────────────────────────────
 FROM alpine:${ALPINE_VERSION} AS streamlink-builder
@@ -246,14 +245,21 @@ RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
 # runtime, because /var/lib/tvheadend is a mounted volume and does not exist
 # at image build time."
 
+# Picons — optional channel logos bundled in the image.
+# Path is inside /var/lib/tvheadend so everything user-facing is in one place.
+# Users can also drop picons directly into their mounted config folder.
+# Set in TVHeadend: Configuration → General → Base → Picon path → /var/lib/tvheadend/picons
+RUN mkdir -p /var/lib/tvheadend/picons
+COPY picons/ /var/lib/tvheadend/picons/
+
 # Entrypoint: PUID/PGID remapping, TZ, device groups, first-run ACL setup
 COPY support/container-entrypoint.sh /init
 RUN chmod +x /init
 
 EXPOSE 9981 9982 9983
 
+# Single volume covers everything: config, recordings, picons, streamlink config
 VOLUME /var/lib/tvheadend
-VOLUME /var/lib/tvheadend/recordings
 
 WORKDIR /var/lib/tvheadend
 

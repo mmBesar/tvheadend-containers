@@ -8,25 +8,13 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 TVHeadend compiled from source on Alpine Linux edge, with streamlink, dashdrm,
-and hlsdrm plugins included. All three architectures built natively — no QEMU.
+and hlsdrm plugins pre-configured and ready to use.
 
-## Supported architectures
+Supports `linux/amd64`, `linux/arm64`, and `linux/riscv64` — all built natively, no QEMU.
 
-| Arch | Builder | Notes |
-|------|---------|-------|
-| `linux/amd64` | `ubuntu-latest` | Native |
-| `linux/arm64` | `ubuntu-24.04-arm` | Native GitHub-hosted (free) |
-| `linux/riscv64` | `ubuntu-24.04-riscv` | Native via RISE RISC-V Runners |
+---
 
-## Environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PUID` | `1000` | UID to run tvheadend as |
-| `PGID` | `1000` | GID to run tvheadend as |
-| `TZ` | `UTC` | Timezone, e.g. `Africa/Cairo` |
-
-## Usage
+## Quick start
 
 ```yaml
 services:
@@ -47,32 +35,77 @@ services:
     restart: unless-stopped
 ```
 
+### With picons
+
+Picons live inside the config volume — no extra mount needed:
+
+```yaml
+    volumes:
+      - ./config:/var/lib/tvheadend
+      - ./recordings:/var/lib/tvheadend/recordings
+```
+
+Drop your picon `.png` files into `./config/picons/` on the host, then set
+the path in TVHeadend under:
+**Configuration → General → Base → Picon path** → `/var/lib/tvheadend/picons`
+
+---
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUID` | `1000` | UID to run as — should match your host user |
+| `PGID` | `1000` | GID to run as — should match your host group |
+| `TZ` | `UTC` | Timezone, e.g. `Africa/Cairo`, `Europe/London` |
+
+---
+
+## Paths
+
+| Path | Description |
+|------|-------------|
+| `/var/lib/tvheadend` | Config and database — **must be mounted** |
+| `/var/lib/tvheadend/recordings` | Recordings output |
+| `/var/lib/tvheadend/picons` | Picon/channel logos — inside the config volume |
+
+---
+
+## Ports
+
+| Port | Protocol | Description |
+|------|----------|-------------|
+| `9981` | HTTP | WebUI |
+| `9982` | HTSP | Kodi, Jellyfin, and other clients |
+| `9983` | HTTPS | WebUI (TLS) |
+
+---
+
 ## Authentication
 
-On first start a wildcard `*` access entry is created — no login required by
-default, matching classic LinuxServer behavior.
+On first start, a wildcard `*` access entry is created — **no login required
+by default**, matching classic LinuxServer behavior.
 
 **To enable authentication:**
-1. Create your user under **Configuration → Users → Passwords**
-2. Create an access entry under **Configuration → Users → Access Entries**
+1. Go to **Configuration → Users → Passwords** — create your user
+2. Go to **Configuration → Users → Access Entries** — create an entry for your user
 3. Disable or delete the `*` wildcard entry
 
-To revert to open access, re-enable the `*` entry or create a new one.
+To revert to open access, re-enable the `*` entry.
 
-## Streamlink plugins
+---
 
-Both plugins load **automatically** on every `streamlink` invocation — no
-`--plugin-dir` flag ever needed. The entrypoint writes a streamlink config
-to `$HOME/.config/streamlink/config` (the correct XDG path) on every
-startup, setting `plugin-dir` permanently.
+## Streamlink
 
-### dashdrm — DASH streams with DRM/ClearKey
+streamlink is pre-installed with the **dashdrm** and **hlsdrm** plugins
+loaded automatically — no `--plugin-dir` flag needed anywhere.
 
-For DASH `.mpd` streams. Prefix the URL with `dashdrm://`:
+### DASH streams (with or without DRM)
+
+Use the `dashdrm://` prefix in TVHeadend's pipe command:
 
 ```
-pipe:///usr/bin/env streamlink \
-  --stdout \
+pipe:///usr/bin/env streamlink --stdout \
   --http-header "User-Agent=Mozilla/5.0" \
   --http-header "Referer=https://your-provider.example/" \
   --http-header "Origin=https://your-provider.example" \
@@ -83,15 +116,14 @@ pipe:///usr/bin/env streamlink \
   --url "dashdrm://https://your-provider.example/manifest.mpd"
 ```
 
-For unencrypted DASH streams, omit `--dashdrm-decryption-key`.
+Omit `--dashdrm-decryption-key` for unencrypted DASH streams.
 
-### hlsdrm — HLS streams with DRM/ClearKey
+### HLS streams (with or without DRM)
 
-For HLS `.m3u8` streams. Prefix the URL with `hlsdrm://`:
+Use the `hlsdrm://` prefix:
 
 ```
-pipe:///usr/bin/env streamlink \
-  --stdout \
+pipe:///usr/bin/env streamlink --stdout \
   --http-header "User-Agent=Mozilla/5.0" \
   --http-header "Referer=https://your-provider.example/" \
   --http-header "Origin=https://your-provider.example" \
@@ -102,67 +134,39 @@ pipe:///usr/bin/env streamlink \
   --url "hlsdrm://https://your-provider.example/stream.m3u8"
 ```
 
-For unencrypted HLS streams, use standard streamlink without the `hlsdrm://` prefix.
-
-### Standard HLS / IPTV streams
-
-For plain IPTV or HLS streams that don't need DRM:
+### Plain IPTV / HLS (no DRM)
 
 ```
-pipe:///usr/bin/env streamlink \
-  --stdout \
+pipe:///usr/bin/env streamlink --stdout \
   --http-header "User-Agent=Mozilla/5.0" \
-  --http-header "Referer=https://your-provider.example/" \
   --default-stream best \
   --url "https://your-provider.example/stream.m3u8"
 ```
 
-### Key format note
+### Key format
 
-Decryption keys can be passed as:
-- Hex key only: `--dashdrm-decryption-key "aabbccdd..."`
-- KID:KEY pair: `--dashdrm-decryption-key "kid_hex:key_hex"`
+Keys can be passed as hex only or as a `KID:KEY` pair:
 
-If only one key is given, all streams use it. See the
-[dashdrm](https://github.com/titus-au/streamlink-plugin-dashdrm) and
-[hlsdrm](https://github.com/titus-au/streamlink-plugin-hlsdrm) docs for
-advanced multi-key and multi-audio options.
+```
+--dashdrm-decryption-key "aabbccdd..."
+--dashdrm-decryption-key "kid_in_hex:key_in_hex"
+```
 
-## Ports
+See [dashdrm docs](https://github.com/titus-au/streamlink-plugin-dashdrm) and
+[hlsdrm docs](https://github.com/titus-au/streamlink-plugin-hlsdrm) for
+advanced options (multi-key, multi-audio, multi-period).
 
-| Port | Protocol | Description |
-|------|----------|-------------|
-| `9981` | HTTP | WebUI |
-| `9982` | HTSP | Kodi / Jellyfin / client apps |
-| `9983` | HTTPS | WebUI (TLS) |
+---
 
-## riscv64 notes
+## DVB descrambling
 
-`libhdhomerun` is not available in Alpine for riscv64. TVHeadend is built
-with `--disable-hdhomerun_client` on that arch. Everything else — DVB-CSA,
-IPTV, SAT>IP, streamlink — works normally.
+This image connects to an external OSCam or NCam server via
+**CAPMT (Linux Network DVBAPI)**. To configure:
 
-## Branches & Workflows
-
-| Branch | Mirrors | Sync Workflow | Schedule |
-|--------|---------|---------------|---------|
-| `tvheadend` | `tvheadend/tvheadend:master` | `sync-tvheadend.yml` | Every 6h |
-| `sl-dashdrm` | `titus-au/streamlink-plugin-dashdrm:main` | `sync-sl-dashdrm.yml` | Every 6h |
-| `sl-hlsdrm` | `titus-au/streamlink-plugin-hlsdrm:main` | `sync-sl-hlsdrm.yml` | Every 6h |
-
-Builds always use our own mirrored branches — never fetches from upstream
-at build time — so builds are reproducible and resilient to upstream outages
-or deletions.
-
-## RISE RISC-V Runners
-
-The riscv64 build requires the **RISE RISC-V Runners** GitHub App.
-Install it at [risev-runners.org](https://risev-runners.org) and grant it
-access to this repo.
-
-> If you delete and recreate this repo, re-authorize the RISE app under
-> **Settings → Integrations → GitHub Apps** — it binds to the repo's
-> internal ID, not its name.
+1. Run an OSCam or NCam container on your network
+2. In TVHeadend go to **Configuration → CAs → Add**
+3. Select **CAPMT (Linux Network DVBAPI)**
+4. Set the server IP and port (default OSCam: `9000`, NCam: `9001`)
 
 ---
 

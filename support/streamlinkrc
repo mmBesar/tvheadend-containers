@@ -1,8 +1,0 @@
-# /etc/streamlink/streamlinkrc
-# System-wide streamlink configuration for the TVHeadend container.
-# Any CLI argument can be set here as a permanent default.
-# See: https://streamlink.github.io/cli.html
-
-# Auto-load dashdrm and hlsdrm plugins from this directory.
-# This means NO --plugin-dir flag is ever needed in TVHeadend pipe commands.
-plugin-dir=/usr/local/share/streamlink/plugins

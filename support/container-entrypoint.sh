@@ -67,17 +67,12 @@ chown -R tvheadend:tvheadend \
 # Config:    $HOME/.config/streamlink/config        (XDG_CONFIG_HOME)
 # Sideload:  $HOME/.local/share/streamlink/plugins  (XDG_DATA_HOME, auto-scanned)
 
-# Config file
+# Config file sets plugin-dir — single mechanism, no XDG symlinks needed.
+# Having both XDG symlinks AND plugin-dir causes "being overridden" log spam.
 mkdir -p "${TVH_DATA}/.config/streamlink"
 printf 'plugin-dir=/usr/local/share/streamlink/plugins\n'     > "${TVH_DATA}/.config/streamlink/config"
 
-# XDG sideload path — symlink shipped plugins for auto-discovery
-mkdir -p "${TVH_DATA}/.local/share/streamlink/plugins"
-for PLUGIN in /usr/local/share/streamlink/plugins/*.py; do
-    ln -snf "$PLUGIN" "${TVH_DATA}/.local/share/streamlink/plugins/$(basename "$PLUGIN")"
-done
-
-chown -R tvheadend:tvheadend     "${TVH_DATA}/.config"     "${TVH_DATA}/.local"
+chown -R tvheadend:tvheadend "${TVH_DATA}/.config"
 echo "[init] streamlink ready for tvheadend user"
 
 

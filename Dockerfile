@@ -231,16 +231,11 @@ RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
  && cp -a /streamlink-pkgs/. "${SITE}/" \
  && rm -rf /streamlink-pkgs \
  # ── root user setup (baked in — root home is never a volume) ─────────────
- # Config: tells streamlink where to find plugins via plugin-dir
+ # Config file sets plugin-dir — this is the single mechanism used.
+ # No XDG symlinks needed; having both causes "being overridden" log spam.
  && mkdir -p /root/.config/streamlink \
  && printf 'plugin-dir=/usr/local/share/streamlink/plugins\n' \
       > /root/.config/streamlink/config \
- # XDG sideload path: symlinks for auto-discovery without any CLI flag
- && mkdir -p /root/.local/share/streamlink/plugins \
- && ln -snf /usr/local/share/streamlink/plugins/dashdrm.py \
-            /root/.local/share/streamlink/plugins/dashdrm.py \
- && ln -snf /usr/local/share/streamlink/plugins/hlsdrm.py \
-            /root/.local/share/streamlink/plugins/hlsdrm.py \
  # ── verify ───────────────────────────────────────────────────────────────
  && streamlink --version \
  && streamlink --can-handle-url "dashdrm://http://test.com/test.mpd" && echo "dashdrm OK" \

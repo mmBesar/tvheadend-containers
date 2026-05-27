@@ -1,6 +1,6 @@
-# .github/workflows/upstream-sync.yml
+# .github/workflows/sync-tvheadend.yml
 #
-# Syncs tvheadend/tvheadend:master → our `upstream` branch.
+# Syncs tvheadend/tvheadend:master → our `tvheadend` branch.
 # Dispatches a build event when new commits are detected.
 
 name: Sync — TVHeadend
@@ -39,28 +39,29 @@ jobs:
       - name: Fetch upstream
         id: fetch
         run: |
-          git remote add upstream https://github.com/tvheadend/tvheadend.git || true
-          git fetch upstream master --no-tags
-          SHA=$(git rev-parse upstream/master)
+          git remote add tvh-upstream https://github.com/tvheadend/tvheadend.git || true
+          git fetch tvh-upstream master --no-tags
+          SHA=$(git rev-parse tvh-upstream/master)
           echo "upstream_sha=${SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Compare with our upstream branch
+      - name: Compare with our tvheadend branch
         id: compare
         run: |
           if git ls-remote --exit-code origin refs/heads/tvheadend; then
-            git fetch origin upstream
+            git fetch origin tvheadend
             OUR=$(git rev-parse origin/tvheadend)
             if [ "$OUR" = "${{ steps.fetch.outputs.upstream_sha }}" ]; then
+              echo "No changes in TVHeadend upstream."
               echo "updated=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
           echo "updated=true" >> "$GITHUB_OUTPUT"
 
-      - name: Update upstream branch
+      - name: Update tvheadend branch
         if: steps.compare.outputs.updated == 'true'
         run: |
-          git checkout -B tvheadend upstream/master
+          git checkout -B tvheadend tvh-upstream/master
           # Strip upstream's .github/ — must never interfere with our workflows
           if [ -d .github ]; then
             git rm -rf .github/ --quiet

@@ -9,5 +9,5 @@
 tvh_sha=
 sl_dashdrm_sha=
 sl_hlsdrm_sha=
-tvh_version=
-build=0
+tvh_version=0.0.0-unknown
+build=1

@@ -104,21 +104,22 @@ jobs:
           SL_DASHDRM=$(grep '^sl_dashdrm_sha=' versions.lock | cut -d= -f2)
           SL_HLSDRM=$(grep '^sl_hlsdrm_sha=' versions.lock | cut -d= -f2)
 
-          cat > versions.lock << LOCKEOF
-# versions.lock — managed by GitHub Actions, do not edit manually.
-# Tracks the exact state of each input branch that was last built.
-# A rebuild is triggered only when one of these values changes.
-# To force a manual rebuild: run container-build workflow_dispatch.
-#
-# tvh_version: upstream version string from git describe (used for image tags)
-# build:       incrementing counter, resets to 1 on new tvh_version
-
-tvh_sha=${{ steps.fetch.outputs.upstream_sha }}
-sl_dashdrm_sha=${SL_DASHDRM}
-sl_hlsdrm_sha=${SL_HLSDRM}
-tvh_version=${NEW_VERSION}
-build=${BUILD}
-LOCKEOF
+          TVH_SHA="${{ steps.fetch.outputs.upstream_sha }}"
+          {
+            echo '# versions.lock — managed by GitHub Actions, do not edit manually.'
+            echo '# Tracks the exact state of each input branch that was last built.'
+            echo '# A rebuild is triggered only when one of these values changes.'
+            echo '# To force a manual rebuild: run container-build workflow_dispatch.'
+            echo '#'
+            echo '# tvh_version: upstream version string from git describe (used for image tags)'
+            echo '# build:       incrementing counter, resets to 1 on new tvh_version'
+            echo ''
+            echo "tvh_sha=${TVH_SHA}"
+            echo "sl_dashdrm_sha=${SL_DASHDRM}"
+            echo "sl_hlsdrm_sha=${SL_HLSDRM}"
+            echo "tvh_version=${NEW_VERSION}"
+            echo "build=${BUILD}"
+          } > versions.lock
 
           git add versions.lock
           git commit -m "chore: tvheadend → ${NEW_VERSION} build ${BUILD} [bot]"

@@ -1,10 +1,9 @@
-# .github/workflows/sl-dashdrm-sync.yml
+# .github/workflows/sync-sl-dashdrm.yml
 #
-# Mirrors ImAleeexx/sl-dashdrm → our `sl-dashdrm` branch.
-# The Dockerfile builds from this branch, not the original repo,
-# so we are never at risk if the original is deleted or goes private.
+# Mirrors titus-au/streamlink-plugin-dashdrm:main → our `sl-dashdrm` branch.
+# On new commits: updates versions.lock on main, which triggers the build.
 
-name: Sync — sl-dashdrm Mirror
+name: Sync — sl-dashdrm
 
 on:
   schedule:
@@ -15,17 +14,15 @@ permissions:
   contents: write
 
 concurrency:
-  group: upstream-sync-sl-dashdrm
+  group: sync-sl-dashdrm
   cancel-in-progress: true
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    outputs:
-      updated: ${{ steps.compare.outputs.updated }}
 
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -44,7 +41,7 @@ jobs:
           SHA=$(git rev-parse sldrm/main)
           echo "upstream_sha=${SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Compare with our sl-dashdrm branch
+      - name: Check if sl-dashdrm branch needs update
         id: compare
         run: |
           if git ls-remote --exit-code origin refs/heads/sl-dashdrm; then
@@ -62,27 +59,40 @@ jobs:
         if: steps.compare.outputs.updated == 'true'
         run: |
           git checkout -B sl-dashdrm sldrm/main
-          # Strip any .github/ from upstream to keep our workflows clean
           if [ -d .github ]; then
             git rm -rf .github/ --quiet
             git commit -m "chore: strip upstream .github/ [bot]"
           fi
           git push origin sl-dashdrm --force-with-lease
-          echo "sl-dashdrm branch updated to ${{ steps.fetch.outputs.upstream_sha }}"
 
-  trigger-build:
-    needs: sync
-    if: needs.sync.outputs.updated == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch container-build
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            await github.rest.repos.createDispatchEvent({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              event_type: 'upstream-release',
-              client_payload: { source: 'sl-dashdrm' }
-            });
+      - name: Update versions.lock on main
+        if: steps.compare.outputs.updated == 'true'
+        run: |
+          git checkout main
+
+          # Read current values — preserve tvheadend fields unchanged
+          TVH_SHA=$(grep '^tvh_sha=' versions.lock | cut -d= -f2)
+          SL_HLSDRM=$(grep '^sl_hlsdrm_sha=' versions.lock | cut -d= -f2)
+          TVH_VERSION=$(grep '^tvh_version=' versions.lock | cut -d= -f2)
+          BUILD=$(grep '^build=' versions.lock | cut -d= -f2)
+          BUILD=$(( BUILD + 1 ))
+
+          cat > versions.lock << LOCKEOF
+# versions.lock — managed by GitHub Actions, do not edit manually.
+# Tracks the exact state of each input branch that was last built.
+# A rebuild is triggered only when one of these values changes.
+# To force a manual rebuild: run container-build workflow_dispatch.
+#
+# tvh_version: upstream version string from git describe (used for image tags)
+# build:       incrementing counter, resets to 1 on new tvh_version
+
+tvh_sha=${TVH_SHA}
+sl_dashdrm_sha=${{ steps.fetch.outputs.upstream_sha }}
+sl_hlsdrm_sha=${SL_HLSDRM}
+tvh_version=${TVH_VERSION}
+build=${BUILD}
+LOCKEOF
+
+          git add versions.lock
+          git commit -m "chore: sl-dashdrm updated, build ${BUILD} [bot]"
+          git push origin main

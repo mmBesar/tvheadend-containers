@@ -5,10 +5,15 @@
 #   linux/arm64   — ubuntu-24.04-arm (native, free GitHub-hosted)
 #   linux/riscv64 — ubuntu-24.04-riscv (RISE RISC-V Runners, native)
 #
+# Triggered by: push to main when versions.lock changes (auto), or
+#               workflow_dispatch (manual — increments build counter).
+#
+# Image tags use the version string from versions.lock:
+#   ghcr.io/mmbesar/tvheadend-containers:4.3-2660~gb162cce27-mmb3
+#   ghcr.io/mmbesar/tvheadend-containers:latest
+#
 # Rules:
 #  - NEVER use QEMU for arm64 or riscv64
-#  - Builds from OUR upstream branch and OUR streamlink-drm branch
-#  - built-tags.txt ledger prevents duplicate builds
 #  - Image names lowercase (GHCR requirement)
 #  - Node24-compatible action versions (Node20 forced off 2026-06-16)
 
@@ -19,44 +24,52 @@ permissions:
   packages: write
 
 concurrency:
-  group: container-build-${{ github.ref }}
+  group: container-build
   cancel-in-progress: true
 
 on:
   push:
     branches: [main]
     paths:
+      - "versions.lock"
       - "Dockerfile"
       - "support/**"
       - ".github/workflows/container-build.yml"
   pull_request:
     paths:
+      - "versions.lock"
       - "Dockerfile"
       - "support/**"
       - ".github/workflows/container-build.yml"
   workflow_dispatch:
-  repository_dispatch:
-    types: [upstream-release]
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────
-  # Pre-flight: resolve branch HEADs and check the build ledger
-  # ─────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
+  # Pre-flight: read versions.lock, resolve refs, handle manual dispatch
+  # ───────────────────────────────────────────────────────────────────────────
   check:
     runs-on: ubuntu-latest
     outputs:
-      should_build:    ${{ steps.ledger.outputs.should_build }}
-      image_name:      ${{ steps.image.outputs.name }}
-      short_sha:       ${{ steps.sha.outputs.short }}
-      tvh_ref:         ${{ steps.refs.outputs.tvh_ref }}
-      dashdrm_ref:     ${{ steps.refs.outputs.dashdrm_ref }}
-      hlsdrm_ref:      ${{ steps.refs.outputs.hlsdrm_ref }}
+      should_build:  ${{ steps.lockfile.outputs.should_build }}
+      image_name:    ${{ steps.image.outputs.name }}
+      tvh_version:   ${{ steps.lockfile.outputs.tvh_version }}
+      build_num:     ${{ steps.lockfile.outputs.build_num }}
+      image_version: ${{ steps.lockfile.outputs.image_version }}
+      tvh_ref:       ${{ steps.refs.outputs.tvh_ref }}
+      dashdrm_ref:   ${{ steps.refs.outputs.dashdrm_ref }}
+      hlsdrm_ref:    ${{ steps.refs.outputs.hlsdrm_ref }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Derive image name (lowercase)
         id: image
@@ -64,63 +77,84 @@ jobs:
           NAME=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Short SHA
-        id: sha
-        run: echo "short=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+      - name: Read versions.lock and determine build number
+        id: lockfile
+        run: |
+          TVH_VERSION=$(grep '^tvh_version=' versions.lock | cut -d= -f2)
+          BUILD=$(grep '^build=' versions.lock | cut -d= -f2)
+
+          # On manual dispatch: increment counter and update the lockfile
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            BUILD=$(( BUILD + 1 ))
+            # Update lockfile with new build number
+            TVH_SHA=$(grep '^tvh_sha=' versions.lock | cut -d= -f2)
+            SL_DASHDRM=$(grep '^sl_dashdrm_sha=' versions.lock | cut -d= -f2)
+            SL_HLSDRM=$(grep '^sl_hlsdrm_sha=' versions.lock | cut -d= -f2)
+            cat > versions.lock << LOCKEOF
+# versions.lock — managed by GitHub Actions, do not edit manually.
+# Tracks the exact state of each input branch that was last built.
+# A rebuild is triggered only when one of these values changes.
+# To force a manual rebuild: run container-build workflow_dispatch.
+#
+# tvh_version: upstream version string from git describe (used for image tags)
+# build:       incrementing counter, resets to 1 on new tvh_version
+
+tvh_sha=${TVH_SHA}
+sl_dashdrm_sha=${SL_DASHDRM}
+sl_hlsdrm_sha=${SL_HLSDRM}
+tvh_version=${TVH_VERSION}
+build=${BUILD}
+LOCKEOF
+            git add versions.lock
+            git commit -m "chore: manual rebuild, build ${BUILD} [bot]"
+            git push origin main
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Image version tag: e.g. 4.3-2660~gb162cce27-mmb3
+          IMAGE_VERSION="${TVH_VERSION}-mmb${BUILD}"
+          echo "tvh_version=${TVH_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build_num=${BUILD}" >> "$GITHUB_OUTPUT"
+          echo "image_version=${IMAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Image version: ${IMAGE_VERSION}"
 
       - name: Resolve branch refs to build from
         id: refs
         run: |
-          # TVHeadend: build from our upstream branch if it exists, else master
+          # TVHeadend: our tvheadend branch
           if git ls-remote --exit-code origin refs/heads/tvheadend; then
             TVH_REF="tvheadend"
-            echo "Building TVHeadend from our upstream branch (${TVH_REF::8})"
           else
             TVH_REF="master"
-            echo "upstream branch not yet created — building from tvheadend/tvheadend:master"
+            echo "WARNING: tvheadend branch not found, falling back to upstream master"
           fi
           echo "tvh_ref=${TVH_REF}" >> "$GITHUB_OUTPUT"
 
-          # streamlink-drm plugin: build from our mirror branch if it exists
+          # dashdrm plugin
           if git ls-remote --exit-code origin refs/heads/sl-dashdrm; then
             DASHDRM_REF="sl-dashdrm"
-            DASHDRM_REPO="https://github.com/$GITHUB_REPOSITORY"
-            echo "Building dashdrm from our streamlink-drm branch (${DASHDRM_REF::8})"
           else
             DASHDRM_REF="main"
-            DASHDRM_REPO="https://github.com/titus-au/streamlink-plugin-dashdrm"
-            echo "streamlink-drm branch not yet created — building from upstream titus-au"
+            echo "WARNING: sl-dashdrm branch not found, falling back to upstream"
           fi
           echo "dashdrm_ref=${DASHDRM_REF}" >> "$GITHUB_OUTPUT"
-          echo "dashdrm_repo=${DASHDRM_REPO}" >> "$GITHUB_OUTPUT"
 
-          # hlsdrm plugin: build from our mirror branch if it exists
+          # hlsdrm plugin
           if git ls-remote --exit-code origin refs/heads/sl-hlsdrm; then
             HLSDRM_REF="sl-hlsdrm"
-            echo "Building hlsdrm from our sl-hlsdrm branch"
           else
             HLSDRM_REF="main"
-            echo "sl-hlsdrm branch not yet created — building from upstream titus-au"
+            echo "WARNING: sl-hlsdrm branch not found, falling back to upstream"
           fi
           echo "hlsdrm_ref=${HLSDRM_REF}" >> "$GITHUB_OUTPUT"
 
-      - name: Check built-tags ledger
-        id: ledger
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ -f built-tags.txt ] && grep -qx "$GITHUB_SHA" built-tags.txt; then
-            echo "SHA $GITHUB_SHA already built — skipping."
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  # ─────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
   # Build each arch on its native runner
-  # ─────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
   build:
     needs: check
     if: needs.check.outputs.should_build == 'true'
@@ -173,11 +207,12 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ghcr.io/${{ needs.check.outputs.image_name }}:latest-${{ matrix.arch }}
-            ghcr.io/${{ needs.check.outputs.image_name }}:${{ needs.check.outputs.short_sha }}-${{ matrix.arch }}
+            ghcr.io/${{ needs.check.outputs.image_name }}:${{ needs.check.outputs.image_version }}-${{ matrix.arch }}
           build-args: |
             ALPINE_VERSION=edge
             TVH_REPO=https://github.com/${{ github.repository }}
             TVH_REF=${{ needs.check.outputs.tvh_ref }}
+            TVH_VERSION=${{ needs.check.outputs.tvh_version }}
             DASHDRM_REPO=https://github.com/${{ github.repository }}
             DASHDRM_REF=${{ needs.check.outputs.dashdrm_ref }}
             HLSDRM_REPO=https://github.com/${{ github.repository }}
@@ -186,9 +221,9 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to:   type=gha,mode=max,scope=${{ matrix.arch }}
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
   # Combine per-arch images into a single multi-arch manifest
-  # ─────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
   manifest:
     needs: [check, build]
     if: |
@@ -214,23 +249,14 @@ jobs:
 
       - name: Create and push multi-arch manifest
         env:
-          IMAGE:     ghcr.io/${{ needs.check.outputs.image_name }}
-          SHORT_SHA: ${{ needs.check.outputs.short_sha }}
+          IMAGE:         ghcr.io/${{ needs.check.outputs.image_name }}
+          IMAGE_VERSION: ${{ needs.check.outputs.image_version }}
         run: |
           docker buildx imagetools create \
             --tag "${IMAGE}:latest" \
-            --tag "${IMAGE}:${SHORT_SHA}" \
+            --tag "${IMAGE}:${IMAGE_VERSION}" \
             "${IMAGE}:latest-amd64" \
             "${IMAGE}:latest-arm64" \
             "${IMAGE}:latest-riscv64"
           docker buildx imagetools inspect "${IMAGE}:latest"
-
-      - name: Update built-tags ledger
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo "$GITHUB_SHA" >> built-tags.txt
-          tail -100 built-tags.txt > built-tags.tmp && mv built-tags.tmp built-tags.txt
-          git add built-tags.txt
-          git commit -m "chore: mark ${GITHUB_SHA::8} as built [bot]"
-          git push origin main
+          echo "Published: ${IMAGE}:${IMAGE_VERSION}"

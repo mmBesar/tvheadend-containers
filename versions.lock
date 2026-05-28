@@ -1,0 +1,13 @@
+# versions.lock — managed by GitHub Actions, do not edit manually.
+# Tracks the exact state of each input branch that was last built.
+# A rebuild is triggered only when one of these values changes.
+# To force a manual rebuild: run container-build workflow_dispatch.
+#
+# tvh_version: upstream version string from git describe (used for image tags)
+# build:       incrementing counter, resets to 1 on new tvh_version
+
+tvh_sha=
+sl_dashdrm_sha=
+sl_hlsdrm_sha=
+tvh_version=
+build=0

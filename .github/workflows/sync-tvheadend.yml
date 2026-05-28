@@ -1,7 +1,9 @@
 # .github/workflows/sync-tvheadend.yml
 #
 # Syncs tvheadend/tvheadend:master → our `tvheadend` branch.
-# Dispatches a build event when new commits are detected.
+# On new commits: fetches the upstream version string (via git describe
+# against the real upstream), updates versions.lock on main, which
+# triggers the container build via the push path trigger.
 
 name: Sync — TVHeadend
 
@@ -20,12 +22,9 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    outputs:
-      updated: ${{ steps.compare.outputs.updated }}
-      upstream_sha: ${{ steps.fetch.outputs.upstream_sha }}
 
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -36,7 +35,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Fetch upstream
+      - name: Fetch upstream TVHeadend
         id: fetch
         run: |
           git remote add tvh-upstream https://github.com/tvheadend/tvheadend.git || true
@@ -44,7 +43,7 @@ jobs:
           SHA=$(git rev-parse tvh-upstream/master)
           echo "upstream_sha=${SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Compare with our tvheadend branch
+      - name: Check if tvheadend branch needs update
         id: compare
         run: |
           if git ls-remote --exit-code origin refs/heads/tvheadend; then
@@ -69,19 +68,58 @@ jobs:
           fi
           git push origin tvheadend --force-with-lease
 
-  trigger-build:
-    needs: sync
-    if: needs.sync.outputs.updated == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch container-build
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            await github.rest.repos.createDispatchEvent({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              event_type: 'upstream-release',
-              client_payload: { source: 'tvheadend', sha: '${{ needs.sync.outputs.upstream_sha }}' }
-            });
+      - name: Get upstream version string
+        if: steps.compare.outputs.updated == 'true'
+        id: version
+        run: |
+          # Fetch tags from real upstream to get a proper git describe version.
+          # Tags are fetched only here, in memory — never pushed to our repo.
+          git fetch tvh-upstream --tags --no-recurse-submodules
+          # git describe finds the nearest tag and produces e.g. 4.3-2660~gb162cce27
+          # The ~ is the Debian-style separator between tag and commit distance.
+          VERSION=$(git describe --tags --always tvh-upstream/master \
+                    | sed 's/-\([0-9]*\)-g/-\1~g/' \
+                    | sed 's/^v//')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Upstream version: ${VERSION}"
+
+      - name: Update versions.lock on main
+        if: steps.compare.outputs.updated == 'true'
+        run: |
+          git checkout main
+
+          # Read current version from lockfile
+          CURRENT_VERSION=$(grep '^tvh_version=' versions.lock | cut -d= -f2)
+          NEW_VERSION="${{ steps.version.outputs.version }}"
+
+          # Reset build counter to 1 on new upstream version
+          if [ "$CURRENT_VERSION" = "$NEW_VERSION" ]; then
+            BUILD=$(grep '^build=' versions.lock | cut -d= -f2)
+            BUILD=$(( BUILD + 1 ))
+          else
+            BUILD=1
+          fi
+
+          # Write updated lockfile — preserve all other SHAs
+          SL_DASHDRM=$(grep '^sl_dashdrm_sha=' versions.lock | cut -d= -f2)
+          SL_HLSDRM=$(grep '^sl_hlsdrm_sha=' versions.lock | cut -d= -f2)
+
+          cat > versions.lock << LOCKEOF
+# versions.lock — managed by GitHub Actions, do not edit manually.
+# Tracks the exact state of each input branch that was last built.
+# A rebuild is triggered only when one of these values changes.
+# To force a manual rebuild: run container-build workflow_dispatch.
+#
+# tvh_version: upstream version string from git describe (used for image tags)
+# build:       incrementing counter, resets to 1 on new tvh_version
+
+tvh_sha=${{ steps.fetch.outputs.upstream_sha }}
+sl_dashdrm_sha=${SL_DASHDRM}
+sl_hlsdrm_sha=${SL_HLSDRM}
+tvh_version=${NEW_VERSION}
+build=${BUILD}
+LOCKEOF
+
+          git add versions.lock
+          git commit -m "chore: tvheadend → ${NEW_VERSION} build ${BUILD} [bot]"
+          git push origin main

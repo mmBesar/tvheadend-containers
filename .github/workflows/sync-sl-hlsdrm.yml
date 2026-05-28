@@ -1,7 +1,7 @@
 # .github/workflows/sync-sl-hlsdrm.yml
 #
 # Mirrors titus-au/streamlink-plugin-hlsdrm:main → our `sl-hlsdrm` branch.
-# Protects us from upstream deletion and triggers a rebuild on updates.
+# On new commits: updates versions.lock on main, which triggers the build.
 
 name: Sync — sl-hlsdrm
 
@@ -20,11 +20,9 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    outputs:
-      updated: ${{ steps.compare.outputs.updated }}
 
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -35,7 +33,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Fetch upstream hlsdrm
+      - name: Fetch upstream sl-hlsdrm
         id: fetch
         run: |
           git remote add hlsdrm https://github.com/titus-au/streamlink-plugin-hlsdrm.git || true
@@ -43,14 +41,14 @@ jobs:
           SHA=$(git rev-parse hlsdrm/main)
           echo "upstream_sha=${SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Compare with our sl-hlsdrm branch
+      - name: Check if sl-hlsdrm branch needs update
         id: compare
         run: |
           if git ls-remote --exit-code origin refs/heads/sl-hlsdrm; then
             git fetch origin sl-hlsdrm
             OUR=$(git rev-parse origin/sl-hlsdrm)
             if [ "$OUR" = "${{ steps.fetch.outputs.upstream_sha }}" ]; then
-              echo "No changes in hlsdrm upstream."
+              echo "No changes in sl-hlsdrm upstream."
               echo "updated=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -66,21 +64,35 @@ jobs:
             git commit -m "chore: strip upstream .github/ [bot]"
           fi
           git push origin sl-hlsdrm --force-with-lease
-          echo "sl-hlsdrm updated to ${{ steps.fetch.outputs.upstream_sha }}"
 
-  trigger-build:
-    needs: sync
-    if: needs.sync.outputs.updated == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch container-build
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            await github.rest.repos.createDispatchEvent({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              event_type: 'upstream-release',
-              client_payload: { source: 'sl-hlsdrm' }
-            });
+      - name: Update versions.lock on main
+        if: steps.compare.outputs.updated == 'true'
+        run: |
+          git checkout main
+
+          # Read current values — preserve all other fields unchanged
+          TVH_SHA=$(grep '^tvh_sha=' versions.lock | cut -d= -f2)
+          SL_DASHDRM=$(grep '^sl_dashdrm_sha=' versions.lock | cut -d= -f2)
+          TVH_VERSION=$(grep '^tvh_version=' versions.lock | cut -d= -f2)
+          BUILD=$(grep '^build=' versions.lock | cut -d= -f2)
+          BUILD=$(( BUILD + 1 ))
+
+          cat > versions.lock << LOCKEOF
+# versions.lock — managed by GitHub Actions, do not edit manually.
+# Tracks the exact state of each input branch that was last built.
+# A rebuild is triggered only when one of these values changes.
+# To force a manual rebuild: run container-build workflow_dispatch.
+#
+# tvh_version: upstream version string from git describe (used for image tags)
+# build:       incrementing counter, resets to 1 on new tvh_version
+
+tvh_sha=${TVH_SHA}
+sl_dashdrm_sha=${SL_DASHDRM}
+sl_hlsdrm_sha=${{ steps.fetch.outputs.upstream_sha }}
+tvh_version=${TVH_VERSION}
+build=${BUILD}
+LOCKEOF
+
+          git add versions.lock
+          git commit -m "chore: sl-hlsdrm updated, build ${BUILD} [bot]"
+          git push origin main

@@ -54,11 +54,23 @@ RUN apk add --no-cache \
       apk add --no-cache libhdhomerun-dev; \
     fi
 
-# Clone then checkout — supports both branch names and full SHAs
+# Clone our mirror branch and inject the version string via rpm/version.
+# TVHeadend's support/version script reads rpm/version as a fallback when
+# git describe fails (no tags). This avoids fetching tags or polluting our repo.
+# TVH_VERSION is passed from versions.lock by the build workflow.
+ARG TVH_VERSION=""
 RUN git clone "${TVH_REPO}" /src \
  && cd /src \
  && git checkout "${TVH_REF}" \
- && git submodule update --init --depth 1
+ && git submodule update --init --depth 1 \
+ # Remove .git so support/version falls through to the rpm/version fallback.
+ # If .git exists, the script runs git describe --match "v*" which fails
+ # (no tags in our repo) and returns 0.0.0-unknown, ignoring rpm/version.
+ && rm -rf /src/.git \
+ # Write the version string — support/version reads rpm/version when .git absent
+ && mkdir -p /src/rpm \
+ && echo "${TVH_VERSION}" > /src/rpm/version \
+ && echo "TVHeadend version: $(cat /src/rpm/version)"
 
 RUN cd /src \
  && git config --global --add safe.directory /src/data/dvb-scan \

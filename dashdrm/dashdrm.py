@@ -6,7 +6,6 @@ import base64
 import queue
 from collections import defaultdict
 from contextlib import suppress
-from dataclasses import dataclass
 from typing import List, Self
 from datetime import timedelta
 
@@ -151,11 +150,13 @@ class MPEGDASHDRM(MPEGDASH):
         keys = self.get_option('decryption-key')
         # if a colon separated key is given, assume its kid:key
         return_keys = []
+        has_kid = False
         for k in keys:
             kid = None
             parts = k.split(':', 1)
             if len(parts) == 2:
                 kid, key = parts
+                has_kid = True
                 kid = kid.replace("-", "").lower()
                 log.debug('Decryption key %s has KID %s', key, kid)
             else:
@@ -183,6 +184,7 @@ class MPEGDASHDRM(MPEGDASH):
             elif key_len != 32:
                 raise FatalPluginError("Expecting 128bit key in 32 hex digits.")
             return_keys.append((kid, key))
+        self.session.options["set-representation-kid"] = has_kid
         return return_keys
 
 
@@ -246,7 +248,7 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
             else:
                 self._cmd.append(cmd)
         #self._cmd.extend(["-report"])
-        log.debug("Updated ffmpeg command %s", self._cmd)
+        log.error("Updated ffmpeg command %s", self._cmd)
 
 
 class DASHStreamWriterDRM(DASHStreamWriter):
@@ -741,12 +743,13 @@ class DASHStreamDRM(DASHStream):
                         rep.mimeType.startswith("application")):
                     subtitles.append(rep)
 
-                rep.kid = cls._get_representation_kid(session, rep)
-                log.debug(
-                    "Representation %s KID=%s",
-                    rep.ident,
-                    rep.kid,
-                )
+                if session.options.get("set-representation-kid"):
+                    rep.kid = cls._get_representation_kid(session, rep)
+                    log.debug(
+                        "Representation %s KID=%s",
+                        rep.ident,
+                        rep.kid,
+                    )
 
         if not video:
             video.append(None)

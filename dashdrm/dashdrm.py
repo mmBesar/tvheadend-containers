@@ -662,16 +662,6 @@ class DASHStreamReaderDRM(DASHStreamReader):
     writer: DASHStreamWriterDRM
     stream: DASHStreamDRM
 
-    def __init__(
-            self,
-            stream: DASHStream,
-            representation: Representation,
-            *args,
-            **kwargs,
-    ):
-        super().__init__(stream, representation, *args, **kwargs)
-        self.representation = representation
-
 class DASHStreamReaderDRMVideo(DASHStreamReaderDRM):
     __worker__ = DASHStreamWorkerDRMVideo
     __writer__ = DASHStreamWriterDRM

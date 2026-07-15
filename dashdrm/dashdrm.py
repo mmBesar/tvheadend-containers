@@ -58,7 +58,9 @@ DASHDRM_OPTIONS = [
 @pluginargument(
     "decryption-key",
     type="comma_list",
-    help="Decryption key(s) to be passed to ffmpeg."
+    help="Decryption key(s) to be passed to ffmpeg. Keys may be supplied as"
+    " 'key' or 'kid:key'. When KIDs are supplied, keys are matched to"
+    " streams automatically, otherwise positional matching is used."
 )
 @pluginargument(
     "presentation-delay",
@@ -147,35 +149,58 @@ class MPEGDASHDRM(MPEGDASH):
                                             **params)
 
     def _process_keys(self):
+        """
+            Parse user-supplied decryption keys.
+
+            Keys may be supplied either as:
+
+                key
+
+            or
+
+                kid:key
+
+            Returns a list of tuples.
+            Each tuple contains (kid, key), where kid is None if no KID was supplied.
+            """
         keys = self.get_option('decryption-key')
-        # if a colon separated key is given, assume its kid:key and take the
-        # last component after the colon
+        # if a colon separated key is given, assume its kid:key
         return_keys = []
+        has_kid = False
         for k in keys:
-            key = k.split(':')
-            key_len = len(key[-1])
-            log.debug('Decryption Key %s has %s digits', key[-1], key_len)
+            kid = None
+            parts = k.split(':', 1)
+            if len(parts) == 2:
+                kid, key = parts
+                has_kid = True
+                kid = kid.replace("-", "").lower()
+                log.debug('Decryption key %s has KID %s', key, kid)
+            else:
+                key = parts[-1]
+            key_len = len(key)
+            log.debug('Decryption Key %s has %s digits', key, key_len)
             if key_len in (21, 22, 23, 24):
                 # key len of 21-24 may mean a base64 key was provided, so we
                 # try and decode it
                 log.debug("Decryption key length is too short to be hex and looks like it might be base64, so we'll try and decode it..")
-                b64_string = key[-1]
+                b64_string = key
                 padding = 4 - (len(b64_string) % 4)
                 b64_string = b64_string + ("=" * padding)
                 b64_key = base64.urlsafe_b64decode(b64_string).hex()
                 if b64_key:
-                    key = [b64_key]
+                    key = b64_key
                     key_len = len(b64_key)
-                    log.debug('Decryption Key (post base64 decode) is %s and has %s digits', key[-1], key_len)
+                    log.debug('Decryption Key (post base64 decode) is %s and has %s digits', key, key_len)
             if key_len == 32:
                 # sanity check that it's a valid hex string
                 try:
-                    int(key[-1], 16)
+                    int(key, 16)
                 except ValueError as err:
                     raise FatalPluginError("Expecting 128bit key in 32 hex digits, but the key contains invalid hex.")
             elif key_len != 32:
                 raise FatalPluginError("Expecting 128bit key in 32 hex digits.")
-            return_keys.append(key[-1])
+            return_keys.append((kid, key))
+        self.session.options["store-representation-kid"] = has_kid
         return return_keys
 
 
@@ -184,35 +209,21 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
     Inherit and extend the FFMPEGMuxer class to pass decryption keys
     to ffmpeg
 
-    We build a list of keys to use based on the value of command line option
-    --dashdrm-decryption-keys. If only 1 key is given, it's used for
-    all streams. If more than 1 key is given, the first key is used for
-    video, and the remaining keys used for remaining streams. If the number
-    of keys given is less than the number of streams, keys are looped
-    starting from the first key after the video key. This will basically
-    mean if you have a key for video, and a key for the rest of the streams
-    you just need to specify 2 keys, but alternatively you can provide a
-    different key for every single stream if needed
+    The caller supplies a list of decryption keys corresponding to the input
+    streams. Each entry is either a hexadecimal decryption key or None for an
+    unencrypted stream. When a key is present, it is passed to FFMPEG using the
+    -decryption_key input option.
     '''
 
-    @classmethod
-    def _get_keys(cls, session):
-        keys=[]
-        if session.options.get("decryption-key"):
-            keys = session.options.get("decryption-key")
-            # If only 1 key is given, then we use that also for all remaining
-            # streams
-            if len(keys) == 1:
-                keys.extend(keys)
-        log.debug('Decryption Keys %s', keys)
-        return keys
-
     def __init__(self, session, *streams, **options):
+        keys = options.pop("keys", None) or []
+        if keys and len(keys) != len(streams):
+            raise PluginError(f"Decryption key count ({len(keys)}) does not match stream count ({len(streams)}).")
+
         super().__init__(session, *streams, **options)
         # if a decryption key is set, we rebuild the ffmpeg command list
         # to include the key before specifying the input stream
-        keys = self._get_keys(session)
-        key = 0
+        k = 0
         subtitles = self.session.options.get("use-subtitles")
         vid_codec_preset = None
         if session.options.get("video-codec-preset"):
@@ -226,12 +237,10 @@ class FFMPEGMuxerDRM(FFMPEGMuxer):
             if cmd == "-i":
                 _ = old_cmd.pop(0)
                 if keys:
-                    self._cmd.extend(["-decryption_key", keys[key]])
-                    key += 1
-                    # If we had more streams than keys, start with the first
-                    # audio key again
-                    if key == len(keys):
-                        key = 1
+                    key = keys[k]
+                    if key is not None:
+                        self._cmd.extend(["-decryption_key", key])
+                    k += 1
                 self._cmd.extend(['-thread_queue_size', '4096'])
                 self._cmd.extend([cmd, _])
             elif subtitles and cmd == "-c:a":
@@ -740,6 +749,14 @@ class DASHStreamDRM(DASHStream):
                         rep.mimeType.startswith("application")):
                     subtitles.append(rep)
 
+                if session.options.get("store-representation-kid"):
+                    rep.kid = cls._get_representation_kid(session, rep)
+                    log.debug(
+                        "Representation %s KID=%s",
+                        rep.ident,
+                        rep.kid,
+                    )
+
         if not video:
             video.append(None)
         if not audio:
@@ -830,6 +847,137 @@ class DASHStreamDRM(DASHStream):
 
         return ret_new
 
+    def _resolve_decryption_keys(self, readers):
+        """
+        Resolve one decryption key for each input stream.
+
+        If user-supplied KIDs are available, representations are matched by KID.
+        If KID matching cannot be completed for every stream, positional key
+        assignment is used instead.
+
+        Returns a list of keys aligned with the supplied reader objects.
+        """
+        in_keys = self.session.options.get("decryption-key")
+        if not in_keys:
+            return []
+
+        kid_lookup = {
+            kid: key
+            for kid, key in in_keys
+            if kid is not None
+        }
+
+        def positional_match():
+            keys = [key for _, key in in_keys]
+            # If only 1 key is given, then we use that also for all remaining streams
+            if len(keys) == 1:
+                return [keys[0]] * len(readers)
+            out_keys = []
+            key = 0
+            for _ in readers:
+                out_keys.append(keys[key])
+                key += 1
+                # If we had more streams than keys, start with the first audio key again
+                if key == len(keys):
+                    key = 1
+            return out_keys
+
+        if not kid_lookup:
+            if len(in_keys) > 1:
+                log.debug("No KIDs provided, using positional key assignment")
+            return positional_match()
+
+        rtn_keys = []
+
+        for reader in readers:
+            representation = self.mpd.get_representation(reader.ident)
+            if not representation:
+                log.debug("Unable to find representation, falling back to positional key assignment")
+                return positional_match()
+            kid = getattr(representation, "kid", None)
+            if kid:
+                log.debug(
+                    "Representation %s KID=%s",
+                    representation.ident,
+                    kid,
+                )
+            else:
+                log.debug("Representation %s missing kid attr", representation.ident)
+            key = kid_lookup.get(kid)
+            if key is None:
+                log.debug(
+                    "Unable to match representation %s by KID, falling back to positional key assignment",
+                    representation.ident,
+                )
+                return positional_match()
+
+            rtn_keys.append(key)
+
+        log.debug("Successfully matched all representations by KID")
+        return rtn_keys
+
+    @staticmethod
+    def _get_init_segment(session: Streamlink, rep: Representation) -> bytes | None:
+        segments = rep.segments(init=True)
+
+        try:
+            segment = next(segments)
+        except StopIteration:
+            return None
+
+        if not segment.init:
+            return None
+
+        request = session.http.get(segment.uri)
+
+        if segment.byterange:
+            start, length = segment.byterange
+            end = start + length - 1 if length else ""
+            request = session.http.get(
+                segment.uri,
+                headers={"Range": f"bytes={start}-{end}"},
+            )
+
+        return request.content
+
+    @staticmethod
+    def _extract_kid(data: bytes) -> str | None:
+        tenc = b"tenc"
+
+        index = data.find(tenc)
+
+        if index == -1:
+            return None
+
+        if index + 28 > len(data):
+            return None
+
+        return data[index + 12:index + 28].hex()
+
+    @classmethod
+    def _get_representation_kid(
+            cls,
+            session: Streamlink,
+            rep: Representation,
+    ) -> str | None:
+
+        # Get from MPD
+        for cp in rep.contentProtections:
+            if cp.default_KID:
+                return cp.default_KID.replace("-", "").lower()
+
+        for cp in rep.parent.contentProtections:
+            if cp.default_KID:
+                return cp.default_KID.replace("-", "").lower()
+
+        # Fallback to init segment
+        init = cls._get_init_segment(session, rep)
+
+        if init is None:
+            return None
+
+        return cls._extract_kid(init)
+
     def open(self):
         video, audio, audio1 = None, None, None
         rep_video = self.video_representation
@@ -878,8 +1026,10 @@ class DASHStreamDRM(DASHStream):
                 metadata["s:s:{0}".format(_)] = ["language={0}".format(rep_subtitle.lang), "title=\"{0}\"".format(rep_subtitle.lang)]
             maps.extend(f"{_}:s" for _ in range(next_map, next_map + len(rep_subtitles)))
 
+        keys = self._resolve_decryption_keys(fds)
+
         if video and audio and FFMPEGMuxerDRM.is_usable(self.session):
-            return FFMPEGMuxerDRM(self.session, *fds, copyts=True, maps=maps, metadata=metadata).open()
+            return FFMPEGMuxerDRM(self.session, *fds, keys=keys, copyts=True, maps=maps, metadata=metadata).open()
         elif video:
             return video
         elif audio:

@@ -883,8 +883,7 @@ class DASHStreamDRM(DASHStream):
             return out_keys
 
         if not kid_lookup:
-            if len(in_keys) > 1:
-                log.debug("No KIDs provided, using positional key assignment")
+            log.debug("No KIDs provided, using positional key assignment")
             return positional_match()
 
         rtn_keys = []

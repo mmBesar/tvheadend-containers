@@ -7,7 +7,7 @@ name: Sync — sl-hlsdrm
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "20 2 * * *"
   workflow_dispatch:
 
 permissions:

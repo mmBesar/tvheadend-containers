@@ -7,7 +7,7 @@ name: Sync — sl-dashdrm
 
 on:
   schedule:
-    - cron: "30 */6 * * *"
+    - cron: "10 2 * * *"
   workflow_dispatch:
 
 permissions:

@@ -9,7 +9,7 @@ name: Sync — TVHeadend
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "30 2 * * *"
   workflow_dispatch:
 
 permissions:

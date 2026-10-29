@@ -6,8 +6,8 @@
 # tvh_version: upstream version string from git describe (used for image tags)
 # build:       incrementing counter, resets to 1 on new tvh_version
 
-tvh_sha=51ec612fa22c4c78b4697e4c262c943da9cbd6cc
+tvh_sha=443f15ba063d95a1f4a3b74978c07d9d0a5ae9c5
 sl_dashdrm_sha=8d8f7cc057c58cc3f53bfcc94843354d2da9a10d
 sl_hlsdrm_sha=6eb2846359828ce7b7c6fb6992bafbc5181e25a0
-tvh_version=4.3-2899~g51ec612fa
-build=6
+tvh_version=4.3-2927~g443f15ba0
+build=1
